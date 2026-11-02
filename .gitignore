@@ -1,0 +1,4 @@
+build/
+# chapter texts and reference solutions: reading them reads the whole manual
+content/
+.DS_Store
