@@ -1,6 +1,6 @@
 /* The card in a Mac terminal: the matrix is drawn in the top lines, the shell scrolls underneath.
  * While a program runs, space toggles the button and + / - change the light level. ^D at an empty
- * prompt quits. State is kept in $MC1_STATE or ~/.mc1-shell.
+ * prompt quits. State is kept in $MK1_STATE or ~/.mk1-shell.
  *
  * The shell scrolls inside a scroll region below the panel. Terminals drop the region on resize, and a
  * few ignore it, so the region is set again on SIGWINCH and the panel is redrawn after every output
@@ -136,11 +136,11 @@ static long long now_ms(void)
 
 int main(void)
 {
-    const char *p = getenv("MC1_STATE");
+    const char *p = getenv("MK1_STATE");
     if (p)
         snprintf(state_path, sizeof state_path, "%s", p);
     else
-        snprintf(state_path, sizeof state_path, "%s/.mc1-shell", getenv("HOME") ? getenv("HOME") : ".");
+        snprintf(state_path, sizeof state_path, "%s/.mk1-shell", getenv("HOME") ? getenv("HOME") : ".");
 
     tty = isatty(0) && isatty(1);
     if (tty) {

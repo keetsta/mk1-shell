@@ -3,14 +3,14 @@
  * A task feeds the program a script of inputs in segments (button held or not, a light level) and
  * samples the outputs (9 screen rows and the buzzer) at the end of each segment, so the program has the
  * whole segment to settle and exact timing does not matter. Samples are chained into a hash:
- *   h0 = 0..0,  h_i = sha256("mc1/smp" | h_{i-1} | sample_i)
- * The firmware keeps only 4 bytes of sha256("mc1/chk" | h_i) per sample: enough to say which sample
+ *   h0 = 0..0,  h_i = sha256("mk1/smp" | h_{i-1} | sample_i)
+ * The firmware keeps only 4 bytes of sha256("mk1/chk" | h_i) per sample: enough to say which sample
  * went wrong, not what it should have been. The final h_n of a correct program is the answer; the next
- * chapter of the manual is encrypted with key = sha256("mc1/key" | h_n). So reading the next chapter
+ * chapter of the manual is encrypted with key = sha256("mk1/key" | h_n). So reading the next chapter
  * means solving the task (or reimplementing the chip, which is also fine).
  */
-#ifndef MC1_TASKS_H
-#define MC1_TASKS_H
+#ifndef MK1_TASKS_H
+#define MK1_TASKS_H
 
 #include <stdint.h>
 

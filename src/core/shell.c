@@ -16,7 +16,7 @@
 #define HIST_N 16
 #define MAX_CHAPTERS 16
 #define CHAPTER_MAX 8192
-#define STATE_MAGIC 0x4d433102u
+#define STATE_MAGIC 0x4d4b3102u
 #define MARQUEE_TICKS 3            /* 60 ms per column */
 
 /* everything that survives a power cycle */
@@ -84,7 +84,7 @@ static vm_t vm, bench, checker;
 static marquee mq;
 static int mq_on, mq_div;
 static uint16_t shown[VM_ROWS], tone_hz;
-/* the web page (keetsta.me/mc1) protocol, see SPEC.md: an OSC from the page turns web mode on, and then
+/* the web page (keetsta.me/mk1) protocol, see SPEC.md: an OSC from the page turns web mode on, and then
    every frame of the matrix goes back to it as an OSC the page's terminal hides */
 static int web, osc_st, osc_len;
 static char osc[40];
@@ -124,7 +124,7 @@ static void outf(const char *fmt, ...)
 static void prompt(void)
 {
     if (mode == M_LINE)
-        out("mc1> ");
+        out("mk1> ");
     else if (mode == M_EDIT)
         outf("%2d| ", editn + 1);
 }
@@ -773,7 +773,7 @@ static void osc_end(void)
     osc[osc_len] = 0;
     if (!strcmp(osc, "7777;hello")) {
         web = 1;
-        out("\x1b]7777;mc1;1;" MC1_VERSION "\a");
+        out("\x1b]7777;mk1;1;" MK1_VERSION "\a");
         send_frame();
     } else if (!strcmp(osc, "7777;bye")) {
         web = 0;
@@ -838,6 +838,6 @@ void shell_init(void)
     vm_reset(&bench, 0x1234);
     bench.state = VM_IDLE;
     mode = M_LINE;
-    out("\nmc-1. type help\n");
+    out("\nmk-1. type help\n");
     prompt();
 }

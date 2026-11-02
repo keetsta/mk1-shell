@@ -61,8 +61,8 @@ void task_run(const task_def *t, vm_t *vm, const uint8_t (*expect)[4], uint8_t (
         }
         sample[2 * VM_ROWS] = (uint8_t)(vm->dev.bz >> 8);
         sample[2 * VM_ROWS + 1] = (uint8_t)vm->dev.bz;
-        tagged("mc1/smp", h, 32, sample, sizeof sample, h);
-        tagged("mc1/chk", h, 32, NULL, 0, chk);
+        tagged("mk1/smp", h, 32, sample, sizeof sample, h);
+        tagged("mk1/chk", h, 32, NULL, 0, chk);
         if (chk_out)
             memcpy(chk_out[seg], chk, 4);
         if (expect && memcmp(expect[seg], chk, 4)) {
@@ -75,7 +75,7 @@ void task_run(const task_def *t, vm_t *vm, const uint8_t (*expect)[4], uint8_t (
     memcpy(res->hash, h, 32);
 }
 
-void task_key(const uint8_t answer[32], uint8_t key[32]) { tagged("mc1/key", answer, 32, NULL, 0, key); }
+void task_key(const uint8_t answer[32], uint8_t key[32]) { tagged("mk1/key", answer, 32, NULL, 0, key); }
 
 void chapter_crypt(const uint8_t key[32], const uint8_t *in, uint8_t *out, uint32_t len)
 {
@@ -83,7 +83,7 @@ void chapter_crypt(const uint8_t key[32], const uint8_t *in, uint8_t *out, uint3
     for (uint32_t i = 0; i < len; i++) {
         if (i % 32 == 0) {
             uint8_t ctr[4] = {(uint8_t)(i >> 29), (uint8_t)(i >> 21), (uint8_t)(i >> 13), (uint8_t)(i >> 5)};
-            tagged("mc1/txt", key, 32, ctr, 4, ks);
+            tagged("mk1/txt", key, 32, ctr, 4, ks);
         }
         out[i] = in[i] ^ ks[i % 32];
     }

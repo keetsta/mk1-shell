@@ -235,7 +235,7 @@ int main(int argc, char **argv)
     /* shell */
     shell_init();
     type("help\r");
-    CHECK(said("man [n]") && said("mc1> "));
+    CHECK(said("man [n]") && said("mk1> "));
     type("nosuch\r");
     CHECK(said("nosuch: no such command"));
     type("man\r");
@@ -311,18 +311,18 @@ int main(int argc, char **argv)
     type("tasks\r");
     type("man\r");
     type("\x1b[A");
-    CHECK(!strcmp(shown(), "mc1> man") && vcol == 8);
+    CHECK(!strcmp(shown(), "mk1> man") && vcol == 8);
     type("\x1b[A");
-    CHECK(!strcmp(shown(), "mc1> tasks") && vcol == 10);
+    CHECK(!strcmp(shown(), "mk1> tasks") && vcol == 10);
     type("\x1b[B");
-    CHECK(!strcmp(shown(), "mc1> man") && vcol == 8);
+    CHECK(!strcmp(shown(), "mk1> man") && vcol == 8);
     type("\x1b[B");
-    CHECK(!strcmp(shown(), "mc1> ") && vcol == 5);
+    CHECK(!strcmp(shown(), "mk1> ") && vcol == 5);
     type("\x1b[B");
     CHECK(!outbuf[0]);
     /* what was being typed survives a trip through the history */
     type("he\x1b[A\x1b[B");
-    CHECK(!strcmp(shown(), "mc1> he") && vcol == 7);
+    CHECK(!strcmp(shown(), "mk1> he") && vcol == 7);
     type("lp\r");
     CHECK(said("man [n]"));
     /* application cursor mode sends ESC O A */
@@ -334,12 +334,12 @@ int main(int argc, char **argv)
     /* program lines typed in edit stay out of the history */
     type("edit\rmov 1 a\r.\r");
     type("\x1b[A");
-    CHECK(!strcmp(shown(), "mc1> edit"));
+    CHECK(!strcmp(shown(), "mk1> edit"));
     /* ^C drops the line and starts again from the newest command */
     type("\x1b[A");
-    CHECK(!strcmp(shown(), "mc1> help"));
+    CHECK(!strcmp(shown(), "mk1> help"));
     type("\x03\x1b[A");
-    CHECK(said("^C") && !strcmp(shown(), "mc1> edit"));
+    CHECK(said("^C") && !strcmp(shown(), "mk1> edit"));
     type("\x03");
     /* older commands than HIST_N fall off */
     for (int i = 0; i < 20; i++) {
@@ -349,7 +349,7 @@ int main(int argc, char **argv)
     }
     for (int i = 0; i < 16; i++)
         type("\x1b[A");
-    CHECK(!strcmp(shown(), "mc1> man 4"));
+    CHECK(!strcmp(shown(), "mk1> man 4"));
     type("\x1b[A");
     CHECK(!outbuf[0]);
     type("\x03");
@@ -369,7 +369,7 @@ int main(int argc, char **argv)
             const char *typed = shown() + 5;
             while (*typed == ' ')            /* the history keeps commands without edge spaces */
                 typed++;
-            snprintf(want, sizeof want, "mc1> %s", typed);
+            snprintf(want, sizeof want, "mk1> %s", typed);
             type("\r\x1b[A");
             CHECK(!strcmp(want, shown()));
             type("\x03");
@@ -379,7 +379,7 @@ int main(int argc, char **argv)
     /* the wrong keyboard layout: "help" typed as Cyrillic "рудз" never gets into the line, so five
        backspaces can't walk into the prompt and the next "help" runs */
     type("\xd1\x80\xd1\x83\xd0\xb4\xd0\xb7");
-    CHECK(!strcmp(outbuf, "\a\a\a\a") && !strcmp(shown(), "mc1> ") && vcol == 5);
+    CHECK(!strcmp(outbuf, "\a\a\a\a") && !strcmp(shown(), "mk1> ") && vcol == 5);
     type("\x7f\x7f\x7f\x7f\x7f");
     CHECK(!outbuf[0] && vcol == 5);
     type("help\r");
@@ -393,11 +393,11 @@ int main(int argc, char **argv)
     type("hlp\x1b[D\x1b[D");
     CHECK(vcol == 6);
     type("e");
-    CHECK(!strcmp(shown(), "mc1> help") && vcol == 7);
+    CHECK(!strcmp(shown(), "mk1> help") && vcol == 7);
     type("\x7f");
-    CHECK(!strcmp(shown(), "mc1> hlp") && vcol == 6);
+    CHECK(!strcmp(shown(), "mk1> hlp") && vcol == 6);
     type("\x1b[3~");
-    CHECK(!strcmp(shown(), "mc1> hp") && vcol == 6);
+    CHECK(!strcmp(shown(), "mk1> hp") && vcol == 6);
     type("\x1b[H");
     CHECK(vcol == 5);
     type("\x1b[D");
@@ -461,13 +461,13 @@ int main(int argc, char **argv)
             strncat(all, outbuf, sizeof all - strlen(all) - 1);
             type(" ");
         }
-        CHECK(said("task 1. lamp") && said("mc1> "));
+        CHECK(said("task 1. lamp") && said("mk1> "));
     }
     type("man 0\r");
     type("q");
-    CHECK(said("mc1> ") && !said("task 1. lamp"));
+    CHECK(said("mk1> ") && !said("task 1. lamp"));
     type("man 0\r\x03");
-    CHECK(said("mc1> "));
+    CHECK(said("mk1> "));
     fake_rows = 0;
     type("man 0\r");
     CHECK(said("task 1. lamp") && !said("-- more"));
@@ -475,7 +475,7 @@ int main(int argc, char **argv)
     /* the web page protocol: hello turns frames on, every change of the matrix goes out as an OSC */
     type("try mov 0 pix\r");
     type("\x1b]7777;hello\a");
-    CHECK(said("\x1b]7777;mc1;1;" MC1_VERSION "\a") && said("\x1b]7777;f;000000000000000000000000000000000000;0\a"));
+    CHECK(said("\x1b]7777;mk1;1;" MK1_VERSION "\a") && said("\x1b]7777;f;000000000000000000000000000000000000;0\a"));
     type("try mov 0xffff pix\r");
     CHECK(said("\x1b]7777;f;ffff00000000000000000000000000000000;0\a"));
     type("try mov 440 bz\r");
@@ -483,12 +483,12 @@ int main(int argc, char **argv)
     type("try mov 0 bz\r");
     /* the OSC never reaches the line: typed in the middle of a word, the word still runs */
     type("he\x1b]7777;hello\alp\r");
-    CHECK(said("man [n]") && said("\x1b]7777;mc1;1;" MC1_VERSION "\a"));
+    CHECK(said("man [n]") && said("\x1b]7777;mk1;1;" MK1_VERSION "\a"));
     /* in a running program too, and ESC \ ends one as well as BEL */
     type("edit\rtop: mov clk a\rwait 1\rjmp top\r.\rrun\r");
     CHECK(shell_running());
     type("\x1b]7777;hello\x1b\\");
-    CHECK(shell_running() && said("\x1b]7777;mc1;1;" MC1_VERSION "\a"));
+    CHECK(shell_running() && said("\x1b]7777;mk1;1;" MK1_VERSION "\a"));
     type("\x03");
     /* other OSCs and overlong ones are dropped without a trace */
     type("\x1b]0;title\a\x1b]7777;helloooooooooooooooooooooooooooooooooooooooooo\a");
@@ -503,7 +503,7 @@ int main(int argc, char **argv)
     CHECK(!said("\x1b]7777;f;"));
     /* arrows still work after all that */
     type("help\r\x1b[A");
-    CHECK(!strcmp(shown(), "mc1> help"));
+    CHECK(!strcmp(shown(), "mk1> help"));
     type("\x03");
 
     printf("%d checks, %d failed\n", checks, fails);

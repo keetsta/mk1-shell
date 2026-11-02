@@ -1,13 +1,13 @@
-/* The card's shell: a line editor over the serial port, the manual, tasks, and the MC-1 chip.
+/* The card's shell: a line editor over the serial port, the manual, tasks, and the MK-1 chip.
  * Single-threaded and non-blocking: the platform feeds every received byte to shell_input and calls
  * shell_tick every 20 ms.
  */
-#ifndef MC1_SHELL_H
-#define MC1_SHELL_H
+#ifndef MK1_SHELL_H
+#define MK1_SHELL_H
 
 /* the firmware's version: the page shows it next to the latest release, whose tag is v<this>.
    Bump it with every release */
-#define MC1_VERSION "0.1.0"
+#define MK1_VERSION "0.1.0"
 
 void shell_init(void);
 void shell_input(char c);

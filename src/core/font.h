@@ -1,6 +1,6 @@
 /* Lowercase pixel font for the 16x9 matrix and a scrolling line built from it. */
-#ifndef MC1_FONT_H
-#define MC1_FONT_H
+#ifndef MK1_FONT_H
+#define MK1_FONT_H
 
 #include <stdint.h>
 

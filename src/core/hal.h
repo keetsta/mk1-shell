@@ -1,8 +1,8 @@
 /* What the shell needs from the card. src/host implements it for a Mac terminal; the RP2350 build
- * implements it over TinyUSB CDC, the IS31FL3731 and the GPIOs (see the notes in mc1-card/CLAUDE.md).
+ * implements it over TinyUSB CDC, the IS31FL3731 and the GPIOs (see the notes in mk1-card/CLAUDE.md).
  */
-#ifndef MC1_HAL_H
-#define MC1_HAL_H
+#ifndef MK1_HAL_H
+#define MK1_HAL_H
 
 #include <stddef.h>
 #include <stdint.h>

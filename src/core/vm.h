@@ -1,11 +1,11 @@
-/* MC-1: the made-up chip the card's shell is programmed in.
+/* MK-1: the made-up chip the card's shell is programmed in.
  *
  * 16-bit words, four registers a b c d, a test flag, ports for the card's real devices.
  * A screen row is one word: bit 15 is the leftmost of the 16 columns.
  * Time runs in ticks of 20 ms; a program runs until `wait` hands the tick back.
  */
-#ifndef MC1_VM_H
-#define MC1_VM_H
+#ifndef MK1_VM_H
+#define MK1_VM_H
 
 #include <stddef.h>
 #include <stdint.h>

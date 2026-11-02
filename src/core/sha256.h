@@ -1,5 +1,5 @@
-#ifndef MC1_SHA256_H
-#define MC1_SHA256_H
+#ifndef MK1_SHA256_H
+#define MK1_SHA256_H
 
 #include <stddef.h>
 #include <stdint.h>
