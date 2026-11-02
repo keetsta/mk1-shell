@@ -773,7 +773,7 @@ static void osc_end(void)
     osc[osc_len] = 0;
     if (!strcmp(osc, "7777;hello")) {
         web = 1;
-        out("\x1b]7777;mc1;1\a");
+        out("\x1b]7777;mc1;1;" MC1_VERSION "\a");
         send_frame();
     } else if (!strcmp(osc, "7777;bye")) {
         web = 0;

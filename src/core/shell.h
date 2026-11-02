@@ -5,6 +5,10 @@
 #ifndef MC1_SHELL_H
 #define MC1_SHELL_H
 
+/* the firmware's version: the page shows it next to the latest release, whose tag is v<this>.
+   Bump it with every release */
+#define MC1_VERSION "0.1.0"
+
 void shell_init(void);
 void shell_input(char c);
 void shell_tick(void);
