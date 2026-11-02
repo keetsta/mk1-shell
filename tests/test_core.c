@@ -472,6 +472,40 @@ int main(int argc, char **argv)
     type("man 0\r");
     CHECK(said("task 1. lamp") && !said("-- more"));
 
+    /* the web page protocol: hello turns frames on, every change of the matrix goes out as an OSC */
+    type("try mov 0 pix\r");
+    type("\x1b]7777;hello\a");
+    CHECK(said("\x1b]7777;mc1;1\a") && said("\x1b]7777;f;000000000000000000000000000000000000;0\a"));
+    type("try mov 0xffff pix\r");
+    CHECK(said("\x1b]7777;f;ffff00000000000000000000000000000000;0\a"));
+    type("try mov 440 bz\r");
+    CHECK(said(";440\a"));
+    type("try mov 0 bz\r");
+    /* the OSC never reaches the line: typed in the middle of a word, the word still runs */
+    type("he\x1b]7777;hello\alp\r");
+    CHECK(said("man [n]") && said("\x1b]7777;mc1;1\a"));
+    /* in a running program too, and ESC \ ends one as well as BEL */
+    type("edit\rtop: mov clk a\rwait 1\rjmp top\r.\rrun\r");
+    CHECK(shell_running());
+    type("\x1b]7777;hello\x1b\\");
+    CHECK(shell_running() && said("\x1b]7777;mc1;1\a"));
+    type("\x03");
+    /* other OSCs and overlong ones are dropped without a trace */
+    type("\x1b]0;title\a\x1b]7777;helloooooooooooooooooooooooooooooooooooooooooo\a");
+    CHECK(!outbuf[0]);
+    /* bye stops the frames; so does the card when the terminal goes away */
+    type("\x1b]7777;bye\a");
+    type("try mov 1 pix\r");
+    CHECK(!said("\x1b]7777;f;"));
+    type("\x1b]7777;hello\a");
+    shell_disconnect();
+    type("try mov 3 pix\r");
+    CHECK(!said("\x1b]7777;f;"));
+    /* arrows still work after all that */
+    type("help\r\x1b[A");
+    CHECK(!strcmp(shown(), "mc1> help"));
+    type("\x03");
+
     printf("%d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

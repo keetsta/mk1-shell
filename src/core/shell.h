@@ -10,5 +10,7 @@ void shell_input(char c);
 void shell_tick(void);
 /* a program is running in the foreground (the platform may route keys to fake inputs) */
 int shell_running(void);
+/* the terminal went away (DTR dropped on the card): stop sending frames to the web page */
+void shell_disconnect(void);
 
 #endif

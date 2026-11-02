@@ -84,6 +84,10 @@ static vm_t vm, bench, checker;
 static marquee mq;
 static int mq_on, mq_div;
 static uint16_t shown[VM_ROWS], tone_hz;
+/* the web page (keetsta.me/mc1) protocol, see SPEC.md: an OSC from the page turns web mode on, and then
+   every frame of the matrix goes back to it as an OSC the page's terminal hides */
+static int web, osc_st, osc_len;
+static char osc[40];
 static uint8_t chbuf[CHAPTER_MAX];
 static const char *more_p;         /* what the pager has not shown yet */
 static uint32_t more_left;
@@ -125,18 +129,34 @@ static void prompt(void)
         outf("%2d| ", editn + 1);
 }
 
+/* ESC ] 7777 ; f ; <9 rows, 4 hex digits each, row 0 first> ; <buzzer Hz> BEL */
+static void send_frame(void)
+{
+    char b[64];
+    int k = snprintf(b, sizeof b, "\x1b]7777;f;");
+    for (int r = 0; r < VM_ROWS; r++)
+        k += snprintf(b + k, sizeof b - (size_t)k, "%04x", shown[r]);
+    k += snprintf(b + k, sizeof b - (size_t)k, ";%u\a", tone_hz);
+    hal_write(b, (size_t)k);
+}
+
 static void show(const uint16_t rows[VM_ROWS])
 {
     if (memcmp(rows, shown, sizeof shown)) {
         memcpy(shown, rows, sizeof shown);
         hal_matrix(shown);
+        if (web)
+            send_frame();
     }
 }
 
 static void tone(uint16_t hz)
 {
-    if (hz != tone_hz)
+    if (hz != tone_hz) {
         hal_tone(tone_hz = hz);
+        if (web)
+            send_frame();
+    }
 }
 
 static void save(void) { hal_save(&st, sizeof st); }
@@ -617,7 +637,7 @@ static void key(char k, int arg)
     }
 }
 
-void shell_input(char c)
+static void key_input(char c)
 {
     if (mode == M_RUN) {
         if (c == 3)
@@ -744,6 +764,62 @@ void shell_tick(void)
         }
     }
 }
+
+/* an OSC from the page has ended */
+static void osc_end(void)
+{
+    if (osc_len >= (int)sizeof osc)
+        return;                  /* too long to be ours */
+    osc[osc_len] = 0;
+    if (!strcmp(osc, "7777;hello")) {
+        web = 1;
+        out("\x1b]7777;mc1;1\a");
+        send_frame();
+    } else if (!strcmp(osc, "7777;bye")) {
+        web = 0;
+    }
+}
+
+/* OSC (ESC ] ... BEL or ESC \) is the page's channel and is taken out of the input in every mode, so it
+   never reaches the line, a running program or the pager; any other escape goes on to the keys */
+void shell_input(char c)
+{
+    if (osc_st == 2) {
+        if (c == 7) {
+            osc_st = 0;
+            osc_end();
+        } else if (c == 27) {
+            osc_st = 3;
+        } else if (osc_len < (int)sizeof osc) {
+            osc[osc_len++] = c;
+        }
+        return;
+    }
+    if (osc_st == 3) {           /* ESC inside an OSC: ESC \ ends it, anything else drops it */
+        osc_st = 0;
+        if (c == '\\')
+            osc_end();
+        return;
+    }
+    if (osc_st == 1) {
+        osc_st = 0;
+        if (c == ']') {
+            osc_st = 2;
+            osc_len = 0;
+            return;
+        }
+        key_input(27);
+        key_input(c);
+        return;
+    }
+    if (c == 27) {
+        osc_st = 1;
+        return;
+    }
+    key_input(c);
+}
+
+void shell_disconnect(void) { web = 0; }
 
 int shell_running(void) { return mode == M_RUN; }
 
