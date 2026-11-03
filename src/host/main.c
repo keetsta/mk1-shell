@@ -27,7 +27,7 @@
 static struct termios saved_tio;
 static int tty, dirty = 1, btn, lines = 24;
 static volatile sig_atomic_t resized;
-static uint16_t rows[VM_ROWS], hz, lux = 512;
+static uint16_t rows[VM_ROWS], lux = 512;
 static char state_path[1024];
 
 void hal_write(const char *s, size_t n)
@@ -47,12 +47,6 @@ void hal_write(const char *s, size_t n)
 void hal_matrix(const uint16_t r[VM_ROWS])
 {
     memcpy(rows, r, sizeof rows);
-    dirty = 1;
-}
-
-void hal_tone(uint16_t f)
-{
-    hz = f;
     dirty = 1;
 }
 
@@ -98,7 +92,7 @@ static void draw(void)
             fputs(rows[r] >> (15 - c) & 1 ? "\x1b[38;5;202m\xe2\x97\x8f " : "\x1b[38;5;238m\xc2\xb7 ", stdout);
         fputs("\x1b[0m", stdout);
     }
-    printf("\x1b[%d;1H\x1b[2K    btn %d   lux %4u   bz %5u Hz   %s", VM_ROWS + 2, btn, lux, hz,
+    printf("\x1b[%d;1H\x1b[2K    btn %d   lux %4u   %s", VM_ROWS + 2, btn, lux,
            shell_running() ? "space = button, + - = light" : "");
     printf("\x1b" "8");
     dirty = 0;

@@ -13,8 +13,8 @@ static const char *const SIG[OP__N] = {
     "sd", "sd", "sd", "sd", "sd", "sd", "sd", "sd", "d", "sd", "sd",
     "ss", "ss", "ss", "l", "l", "l", "s", "", "", "d", "sd",
 };
-const char *const VM_PORTS[P__N] = {"btn", "lux", "clk", "rnd", "row", "pix", "bz", "ea", "ed"};
-static const uint8_t PORT_WRITABLE[P__N] = {0, 0, 0, 0, 1, 1, 1, 1, 1};
+const char *const VM_PORTS[P__N] = {"btn", "lux", "clk", "rnd", "row", "pix", "ea", "ed"};
+static const uint8_t PORT_WRITABLE[P__N] = {0, 0, 0, 0, 1, 1, 1, 1};
 
 #define MAX_TOK 4
 #define LABEL_LEN 16
@@ -275,7 +275,7 @@ void vm_reset(vm_t *vm, uint16_t seed)
     vm->err[0] = 0;
     vm->state = VM_RUN;
     memset(vm->dev.screen, 0, sizeof vm->dev.screen);
-    vm->dev.row = vm->dev.bz = vm->dev.clk = 0;
+    vm->dev.row = vm->dev.clk = 0;
     vm->dev.ea = 0;
     vm->dev.rnd = seed ? seed : 0xace1;
 }
@@ -295,7 +295,6 @@ static uint16_t port_read(vm_dev *d, int p, int peek)
         return d->rnd;
     case P_ROW: return d->row;
     case P_PIX: return d->row < VM_ROWS ? d->screen[d->row] : 0;
-    case P_BZ: return d->bz;
     case P_EA: return d->ea;
     case P_ED: {
         uint16_t v = d->ee[d->ea];
@@ -315,7 +314,6 @@ static void port_write(vm_dev *d, int p, uint16_t v)
         if (d->row < VM_ROWS)
             d->screen[d->row] = v;
         break;
-    case P_BZ: d->bz = v; break;
     case P_EA: d->ea = (uint8_t)v; break;
     case P_ED: d->ee[d->ea++] = (uint8_t)v; break;
     }

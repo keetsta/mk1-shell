@@ -24,7 +24,7 @@ enum {
 
 enum { K_NONE, K_LIT, K_REG, K_PORT, K_LABEL };
 
-enum { P_BTN, P_LUX, P_CLK, P_RND, P_ROW, P_PIX, P_BZ, P_EA, P_ED, P__N };
+enum { P_BTN, P_LUX, P_CLK, P_RND, P_ROW, P_PIX, P_EA, P_ED, P__N };
 
 enum { VM_IDLE, VM_RUN, VM_HALT, VM_ERR };
 
@@ -34,7 +34,7 @@ typedef struct { uint8_t op; vm_arg a, b; uint16_t line; } vm_ins;
 /* what the program sees of the card; the platform (or a task) fills the inputs every tick */
 typedef struct {
     uint16_t screen[VM_ROWS];
-    uint16_t row, bz, clk, rnd, lux;
+    uint16_t row, clk, rnd, lux;
     uint8_t btn, ea;
     uint8_t ee[256];           /* U7, the black box */
 } vm_dev;

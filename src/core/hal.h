@@ -12,8 +12,6 @@ void hal_write(const char *s, size_t n);
 /* 9 rows, bit 15 = leftmost column. On the card the driver caps full-screen brightness itself:
    all 144 LEDs at full current is 0.28 A and ~70 C in the IS31FL3731 */
 void hal_matrix(const uint16_t rows[9]);
-/* buzzer tone in Hz, 0 = silent. On the card only ever PWM: a pin stuck high puts DC through the coil */
-void hal_tone(uint16_t hz);
 int hal_button(void);
 /* light level 0..1023 */
 uint16_t hal_lux(void);

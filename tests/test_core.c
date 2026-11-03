@@ -85,7 +85,6 @@ void hal_matrix(const uint16_t r[9])
         if (r[i])
             matrix_lit = 1;
 }
-void hal_tone(uint16_t hz) { (void)hz; }
 int hal_button(void) { return fake_btn; }
 uint16_t hal_lux(void) { return 512; }
 int hal_rows(void) { return fake_rows; }
@@ -475,12 +474,12 @@ int main(int argc, char **argv)
     /* the web page protocol: hello turns frames on, every change of the matrix goes out as an OSC */
     type("try mov 0 pix\r");
     type("\x1b]7777;hello\a");
-    CHECK(said("\x1b]7777;mk1;1;" MK1_VERSION "\a") && said("\x1b]7777;f;000000000000000000000000000000000000;0\a"));
+    CHECK(said("\x1b]7777;mk1;1;" MK1_VERSION "\a") && said("\x1b]7777;f;000000000000000000000000000000000000\a"));
     type("try mov 0xffff pix\r");
-    CHECK(said("\x1b]7777;f;ffff00000000000000000000000000000000;0\a"));
+    CHECK(said("\x1b]7777;f;ffff00000000000000000000000000000000\a"));
+    /* the card has no buzzer, so the chip has no port for one */
     type("try mov 440 bz\r");
-    CHECK(said(";440\a"));
-    type("try mov 0 bz\r");
+    CHECK(said("what is 'bz'?"));
     /* the OSC never reaches the line: typed in the middle of a word, the word still runs */
     type("he\x1b]7777;hello\alp\r");
     CHECK(said("man [n]") && said("\x1b]7777;mk1;1;" MK1_VERSION "\a"));

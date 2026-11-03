@@ -1,8 +1,10 @@
 /* Tasks and the locked manual.
  *
  * A task feeds the program a script of inputs in segments (button held or not, a light level) and
- * samples the outputs (9 screen rows and the buzzer) at the end of each segment, so the program has the
- * whole segment to settle and exact timing does not matter. Samples are chained into a hash:
+ * samples the outputs (the 9 screen rows) at the end of each segment, so the program has the whole segment
+ * to settle and exact timing does not matter. A sample ends in two zero bytes, the place of a buzzer the
+ * card no longer has: they are part of every answer, so dropping them would change every chapter key.
+ * Samples are chained into a hash:
  *   h0 = 0..0,  h_i = sha256("mk1/smp" | h_{i-1} | sample_i)
  * The firmware keeps only 4 bytes of sha256("mk1/chk" | h_i) per sample: enough to say which sample
  * went wrong, not what it should have been. The final h_n of a correct program is the answer; the next

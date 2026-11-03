@@ -59,8 +59,7 @@ void task_run(const task_def *t, vm_t *vm, const uint8_t (*expect)[4], uint8_t (
             sample[2 * r] = (uint8_t)(vm->dev.screen[r] >> 8);
             sample[2 * r + 1] = (uint8_t)vm->dev.screen[r];
         }
-        sample[2 * VM_ROWS] = (uint8_t)(vm->dev.bz >> 8);
-        sample[2 * VM_ROWS + 1] = (uint8_t)vm->dev.bz;
+        sample[2 * VM_ROWS] = sample[2 * VM_ROWS + 1] = 0; /* where the buzzer was, see tasks.h */
         tagged("mk1/smp", h, 32, sample, sizeof sample, h);
         tagged("mk1/chk", h, 32, NULL, 0, chk);
         if (chk_out)

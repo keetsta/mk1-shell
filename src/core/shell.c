@@ -83,7 +83,7 @@ static int editlen, editn;
 static vm_t vm, bench, checker;
 static marquee mq;
 static int mq_on, mq_div;
-static uint16_t shown[VM_ROWS], tone_hz;
+static uint16_t shown[VM_ROWS];
 /* the web page (keetsta.me/mk1) protocol, see SPEC.md: an OSC from the page turns web mode on, and then
    every frame of the matrix goes back to it as an OSC the page's terminal hides */
 static int web, osc_st, osc_len;
@@ -129,14 +129,14 @@ static void prompt(void)
         outf("%2d| ", editn + 1);
 }
 
-/* ESC ] 7777 ; f ; <9 rows, 4 hex digits each, row 0 first> ; <buzzer Hz> BEL */
+/* ESC ] 7777 ; f ; <9 rows, 4 hex digits each, row 0 first> BEL */
 static void send_frame(void)
 {
     char b[64];
     int k = snprintf(b, sizeof b, "\x1b]7777;f;");
     for (int r = 0; r < VM_ROWS; r++)
         k += snprintf(b + k, sizeof b - (size_t)k, "%04x", shown[r]);
-    k += snprintf(b + k, sizeof b - (size_t)k, ";%u\a", tone_hz);
+    b[k++] = '\a';
     hal_write(b, (size_t)k);
 }
 
@@ -145,15 +145,6 @@ static void show(const uint16_t rows[VM_ROWS])
     if (memcmp(rows, shown, sizeof shown)) {
         memcpy(shown, rows, sizeof shown);
         hal_matrix(shown);
-        if (web)
-            send_frame();
-    }
-}
-
-static void tone(uint16_t hz)
-{
-    if (hz != tone_hz) {
-        hal_tone(tone_hz = hz);
         if (web)
             send_frame();
     }
@@ -417,7 +408,6 @@ static void cmd_run(void)
 
 static void run_end(const char *why)
 {
-    tone(0);
     mode = M_LINE;
     outf("%s after %lu tick%s\n", why, (unsigned long)vm.dev.clk, vm.dev.clk == 1 ? "" : "s");
     prompt();
@@ -426,8 +416,8 @@ static void run_end(const char *why)
 static void print_regs(const vm_t *v)
 {
     const vm_dev *d = &v->dev;
-    outf("a=%u b=%u c=%u d=%u f=%u  row=%u pix=0x%04x bz=%u ea=%u\n", v->r[0], v->r[1], v->r[2], v->r[3], v->f,
-         d->row, d->row < VM_ROWS ? d->screen[d->row] : 0, d->bz, d->ea);
+    outf("a=%u b=%u c=%u d=%u f=%u  row=%u pix=0x%04x ea=%u\n", v->r[0], v->r[1], v->r[2], v->r[3], v->f,
+         d->row, d->row < VM_ROWS ? d->screen[d->row] : 0, d->ea);
 }
 
 static void cmd_try(const char *arg)
@@ -455,7 +445,6 @@ static void cmd_try(const char *arg)
     if (vm_exec(&bench, &in))
         outf("%s\n", bench.err);
     show(bench.dev.screen);
-    tone(bench.dev.bz);
     print_regs(&bench);
 }
 
@@ -743,7 +732,6 @@ void shell_tick(void)
         vm.dev.lux = hal_lux();
         vm_tick(&vm);
         show(vm.dev.screen);
-        tone(vm.dev.bz);
         if (vm.state == VM_HALT)
             run_end("halted");
         else if (vm.state == VM_ERR) {
