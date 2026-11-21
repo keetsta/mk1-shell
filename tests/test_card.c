@@ -1,12 +1,13 @@
-/* build/test-card: the card's own screens, pong, the light sensor, the panel and the flash store, on the host. */
+/* build/test-card: the card's screen and its own screens, the light sensor, the panel and the flash store, on the
+ * host. The demo's screens and pong: demo/test_demo.c. */
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "../src/card/face.h"
 #include "../src/card/light.h"
+#include "../src/card/own.h"
 #include "../src/card/panel.h"
-#include "../src/card/pong.h"
 #include "../src/card/store.h"
 
 static int fails, checks;
@@ -137,61 +138,7 @@ static void test_panel(void)
     CHECK(sum <= PANEL_CAP + 72 && pwm[8][15] > 90);
 }
 
-/* ---- pong ---- */
-
-/* a player with a human reaction: holds the button while the ball, as it was 200 ms ago, is above the paddle */
-static float seen[10];
-static int bot(const pong *p, int t)
-{
-    seen[t % 10] = p->by;
-    return seen[(t + 1) % 10] < p->you - 0.5f;
-}
-
-static void test_pong(void)
-{
-    pong p;
-    pong_start(&p, 7);
-    int you = 0, card = 0, matches = 0, inside = 1, won = 0, lost = 0;
-    for (int t = 0; t < 50 * 600; t++) {
-        /* between rallies a person lets go, so the long holds of play never become a way out */
-        pong_tick(&p, p.phase == PONG_PLAY && bot(&p, t));
-        won += p.score[0] > you;
-        lost += p.score[1] > card;
-        matches += p.score[0] + p.score[1] < you + card;
-        you = p.score[0];
-        card = p.score[1];
-        inside &= p.by >= 0 && p.by <= 8 && p.you >= 1 && p.you <= 7 && p.card >= 1 && p.card <= 7;
-    }
-    /* over ten minutes both sides win points, matches end and start again, and nobody is thrown out */
-    printf("pong, ten minutes of a 200 ms player: %d won, %d lost\n", won, lost);
-    CHECK(inside && won >= 3 && lost >= 3 && matches >= 2 && !p.quit);
-
-    /* in a rally the button only raises the paddle, however long it is held */
-    pong_start(&p, 7);
-    while (p.phase != PONG_PLAY)
-        pong_tick(&p, 0);
-    for (int t = 0; t < 150 && p.phase == PONG_PLAY; t++)
-        pong_tick(&p, 1);
-    CHECK(!p.quit && p.held == 0);
-    /* between rallies 2 s leave, and the score waits for them */
-    for (int t = 0; t < 50 * 60 && p.phase != PONG_POINT; t++)
-        pong_tick(&p, 0);
-    CHECK(p.phase == PONG_POINT);
-    for (int t = 0; t < 99; t++)
-        pong_tick(&p, 1);
-    CHECK(!p.quit && p.phase == PONG_POINT);
-    pong_tick(&p, 1);
-    CHECK(p.quit);
-    /* letting go starts the count again */
-    pong_start(&p, 7);
-    for (int t = 0; t < 50 * 60 && p.phase != PONG_POINT; t++)
-        pong_tick(&p, 0);
-    for (int t = 0; t < 300 && p.phase == PONG_POINT; t++)
-        pong_tick(&p, t % 90 != 0);
-    CHECK(!p.quit);
-}
-
-/* ---- face ---- */
+/* ---- face, with the card's own screens ---- */
 
 static face_in in;
 
@@ -223,22 +170,45 @@ static int lit(void)
     return n;
 }
 
+static int own(int m) { return face_mode() == FACE_OWN && own_mode() == m; }
+
+/* the prompt's chevron in full: the address is not running */
+static int chevron(void)
+{
+    uint8_t lum[9][16];
+    face_render(lum);
+    return lum[1][1] == 255 && lum[4][4] == 255 && lum[7][1] == 255;
+}
+
+/* ticks of the next ms the address runs */
+static int away(uint32_t ms)
+{
+    int n = 0;
+    for (uint32_t end = in.ms + ms; in.ms < end;) {
+        run(20);
+        n += !chevron();
+    }
+    return n;
+}
+
 static void test_face(void)
 {
     memset(&in, 0, sizeof in);
     face_init(0);
     CHECK(face_mode() == FACE_BOOT);
     run(800);
-    CHECK(face_mode() == FACE_IDLE && lit() > 0);
-    /* a press starts pong; in a rally holding only moves the paddle, between rallies 2 s leave */
+    CHECK(own(OWN_IDLE) && chevron());
+    /* a press on the prompt runs the address at once */
     press(60);
-    CHECK(face_mode() == FACE_GAME);
-    press(2100);
-    CHECK(face_mode() == FACE_GAME);
-    for (int t = 0; t < 50 * 60 && face_game()->phase != PONG_POINT; t++)
-        run(20);
-    press(2100);
-    CHECK(face_mode() == FACE_IDLE);
+    CHECK(own(OWN_IDLE) && !chevron());
+    /* and that is all the button does here: holding it starts nothing and changes no screen */
+    in.button = 1;
+    run(3000);
+    in.button = 0;
+    run(40);
+    CHECK(own(OWN_IDLE));
+    /* the address comes back by itself every few seconds */
+    CHECK(away(20000) > 300);
     /* a terminal opens the port: the connect animation, then the shell's own pixels, exactly */
     in.linked = 1;
     run(100);
@@ -254,17 +224,30 @@ static void test_face(void)
     /* the button belongs to the shell now */
     press(60);
     CHECK(face_mode() == FACE_SHELL);
-    /* ^D gives the screen back until someone types */
+    /* ^D gives the screen back until someone types; with the terminal there the address runs only when asked */
     face_exit();
     run(20);
-    CHECK(face_mode() == FACE_IDLE);
+    CHECK(own(OWN_IDLE) && away(20000) == 0);
+    press(60);
+    CHECK(!chevron());
     in.typed = 1;
     run(20);
     CHECK(face_mode() == FACE_SHELL);
-    /* the terminal closes: back to idle */
+    /* a press coming as the card gets the screen back belongs to the screen before */
+    in.button = 1;
+    face_exit();
+    run(20);
+    CHECK(own(OWN_IDLE) && chevron());
+    in.button = 0;
+    run(40);
+    CHECK(chevron());
+    in.typed = 1;
+    run(20);
+    CHECK(face_mode() == FACE_SHELL);
+    /* the terminal closes: back to the prompt */
     in.linked = 0;
     run(20);
-    CHECK(face_mode() == FACE_IDLE);
+    CHECK(own(OWN_IDLE));
     /* but a running program keeps the screen until it stops */
     in.linked = 1;
     run(1000);
@@ -275,51 +258,17 @@ static void test_face(void)
     CHECK(face_mode() == FACE_SHELL);
     in.running = 0;
     run(20);
-    CHECK(face_mode() == FACE_IDLE);
+    CHECK(own(OWN_IDLE));
     /* left alone: the cube after 5 minutes, sleep after an hour */
     run(5 * 60 * 1000 + 100);
-    CHECK(face_mode() == FACE_SAVER && lit() > 10);
-    /* a press there only wakes the card, it does not start a game */
+    CHECK(own(OWN_SAVER) && lit() > 10);
+    /* a press there only wakes the card: the prompt, not the address */
     press(60);
-    CHECK(face_mode() == FACE_IDLE);
+    CHECK(own(OWN_IDLE) && chevron());
     run(60 * 60 * 1000 + 100);
-    CHECK(face_mode() == FACE_SLEEP);
+    CHECK(own(OWN_SLEEP));
     press(60);
-    CHECK(face_mode() == FACE_IDLE);
-    /* an abandoned game goes back to idle */
-    press(60);
-    CHECK(face_mode() == FACE_GAME);
-    run(46 * 1000);
-    CHECK(face_mode() == FACE_IDLE);
-    /* the address runs by every few seconds in idle: the screen is not the prompt for a while */
-    int frames = 0, differ = 0;
-    uint8_t first[9][16];
-    run(20);
-    face_render(first);
-    for (; frames < 15 * 50; frames++) {
-        run(20);
-        face_render(lum);
-        differ += memcmp(first, lum, sizeof lum) != 0;
-    }
-    CHECK(differ > 200);
-    /* holding 2 s in idle moves on to the cube, the bottom row filling on the way, and letting go after
-       that starts no game */
-    CHECK(face_mode() == FACE_IDLE);
-    in.button = 1;
-    run(1500);
-    face_render(lum);
-    CHECK(face_mode() == FACE_IDLE && lum[8][0] > 0 && lum[8][9] > 0 && lum[8][15] == 0);
-    run(600);
-    CHECK(face_mode() == FACE_SAVER);
-    in.button = 0;
-    run(100);
-    CHECK(face_mode() == FACE_SAVER);
-    /* a press there brings idle back, and that press starts no game either */
-    press(60);
-    CHECK(face_mode() == FACE_IDLE);
-    /* a slow tap is still a tap */
-    press(1500);
-    CHECK(face_mode() == FACE_GAME);
+    CHECK(own(OWN_IDLE) && chevron());
 }
 
 int main(void)
@@ -327,7 +276,6 @@ int main(void)
     test_store();
     test_light();
     test_panel();
-    test_pong();
     test_face();
     printf("%d checks, %d failed\n", checks, fails);
     return fails != 0;

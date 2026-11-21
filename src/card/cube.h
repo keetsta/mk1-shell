@@ -10,5 +10,7 @@
 
 /* perceived levels 0..255 at t seconds, row 0 on top, column 0 on the left */
 void cube_render(float t, uint8_t lum[9][16]);
+/* the same as levels 0..1, ms after the cube came on */
+void cube_draw(uint32_t ms, float img[9][16]);
 
 #endif

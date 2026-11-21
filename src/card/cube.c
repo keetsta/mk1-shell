@@ -66,3 +66,10 @@ void cube_render(float t, uint8_t lum[9][16]) {
     for (int r = 0; r < 9; r++)
         for (int c = 0; c < 16; c++) lum[r][c] = (uint8_t)(img[r][c] >= 1 ? 255 : img[r][c] * 255.0f + 0.5f);
 }
+
+void cube_draw(uint32_t ms, float img[9][16]) {
+    uint8_t lum[9][16];
+    cube_render((float)(ms % CUBE_PERIOD_MS) / 1000.0f, lum);
+    for (int y = 0; y < 9; y++)
+        for (int x = 0; x < 16; x++) img[y][x] = lum[y][x] / 255.0f;
+}
