@@ -78,6 +78,16 @@ static void test_store(void)
     /* a record of another size (a different firmware's state) is not loaded */
     s = fresh();
     CHECK(!store_load(&s, b, 100));
+    /* the shell's state at its largest (HAL_STATE_MAX, src/core/hal.h) fills a sector; a byte more is refused */
+    static char big[STORE_MAX + 1], back[STORE_MAX];
+    for (int i = 0; i < (int)sizeof big; i++)
+        big[i] = (char)(i * 13);
+    s = fresh();
+    store_load(&s, b, sizeof b);
+    CHECK(store_save(&s, big, STORE_MAX) == 0);
+    s = fresh();
+    CHECK(store_load(&s, back, STORE_MAX) && !memcmp(big, back, STORE_MAX));
+    CHECK(store_save(&s, big, STORE_MAX + 1) == -1);
 }
 
 /* ---- light ---- */

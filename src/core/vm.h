@@ -64,4 +64,13 @@ void vm_tick(vm_t *vm);
 /* executes a single non-flow instruction outside a program; 0 ok, -1 error in vm->err */
 int vm_exec(vm_t *vm, const vm_ins *in);
 
+/* The program as bytes, to keep it and to send it to the board (token.h): per instruction the opcode, then
+ * each operand: a register 0x00..0x03, a port 0x10 + n, a number 0x20 and two bytes high first, a jump
+ * target as the instruction's index */
+#define VM_CODE_MAX (VM_MAX_INSTR * 7)   /* every instruction comparing two numbers */
+int vm_encode(const vm_t *vm, uint8_t out[VM_CODE_MAX]);
+/* code from outside (a token): accepts exactly the bytes vm_encode makes of an assembled program, so what
+   it loads is safe to run. 0 ok, -1 not a program */
+int vm_decode(vm_t *vm, const uint8_t *code, int len);
+
 #endif

@@ -62,8 +62,9 @@ int hal_load(void *buf, size_t n)
     if (!f)
         return 0;
     size_t k = fread(buf, 1, n, f);
+    int longer = fgetc(f) != EOF;
     fclose(f);
-    return k == n;
+    return k == n && !longer;
 }
 
 void hal_save(const void *buf, size_t n)

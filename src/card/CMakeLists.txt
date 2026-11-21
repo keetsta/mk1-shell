@@ -20,7 +20,7 @@ set(MK1_VERSION ${CMAKE_MATCH_1})
 function(mk1_firmware name product description)
     add_executable(${name}
         main.c face.c prompt.c cube.c light.c panel.c store.c is31fl3731.c ${ARGN}
-        ${CORE}/vm.c ${CORE}/sha256.c ${CORE}/tasks.c ${CORE}/font.c ${CORE}/shell.c ${CORE}/content_gen.c)
+        ${CORE}/vm.c ${CORE}/sha256.c ${CORE}/tasks.c ${CORE}/token.c ${CORE}/font.c ${CORE}/shell.c ${CORE}/content_gen.c)
     target_compile_options(${name} PRIVATE -Wall -Wextra)
     target_compile_definitions(${name} PRIVATE
         USBD_MANUFACTURER="keetsta"
@@ -33,7 +33,7 @@ function(mk1_firmware name product description)
         # all of SCRATCH_Y instead of half: the USB interrupt nests on this stack too
         PICO_STACK_SIZE=0x1000
     )
-    target_link_libraries(${name} pico_stdlib pico_flash hardware_adc hardware_flash hardware_i2c hardware_watchdog)
+    target_link_libraries(${name} pico_stdlib pico_flash pico_unique_id hardware_adc hardware_flash hardware_i2c hardware_watchdog)
     pico_enable_stdio_usb(${name} 1)
     pico_enable_stdio_uart(${name} 0)
     pico_set_program_name(${name} "${name}")

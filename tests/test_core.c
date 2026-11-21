@@ -9,6 +9,7 @@
 #include "../src/core/sha256.h"
 #include "../src/core/shell.h"
 #include "../src/core/tasks.h"
+#include "../src/core/token.h"
 #include "../src/core/vm.h"
 
 static int fails, checks;
@@ -90,8 +91,23 @@ int hal_button(void) { return fake_btn; }
 uint16_t hal_lux(void) { return 512; }
 int hal_rows(void) { return fake_rows; }
 void hal_exit(void) { exited = 1; }
-int hal_load(void *buf, size_t n) { (void)buf; (void)n; return 0; }
-void hal_save(const void *buf, size_t n) { (void)buf; (void)n; }
+/* the state as the card keeps it: one record, loaded only at its exact size */
+static uint8_t store[8192];
+static size_t store_n;
+int hal_load(void *buf, size_t n)
+{
+    if (!store_n || n != store_n)
+        return 0;
+    memcpy(buf, store, n);
+    return 1;
+}
+void hal_save(const void *buf, size_t n)
+{
+    if (n <= HAL_STATE_MAX) {
+        memcpy(store, buf, n);
+        store_n = n;
+    }
+}
 
 static void type(const char *s)
 {
@@ -137,6 +153,297 @@ static int asm_err(const char *src, const char *want)
 {
     char err[96] = "";
     return vm_assemble(&vm, src, err, sizeof err) && strstr(err, want);
+}
+
+/* ---- the board: hmac, the program as bytes, the token, top ---- */
+
+/* task 1, right but slow to react: 11 instructions */
+static const char LAMP[] = "top: mov 0 a\neq btn 1\njf draw\nmov 0xffff a\ndraw: mov 0 row\nn: mov a pix\nadd 1 row\n"
+                           "lt row 9\njt n\nwait 10\njmp top\n";
+/* made up: the real card's never goes in here */
+static const uint8_t test_chipid[8] = {1, 2, 3, 4, 5, 6, 7, 8},
+                     test_randid[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+
+static int is_hex(const uint8_t h[32], const char *want)
+{
+    char s[65];
+    hex(h, s);
+    return !strcmp(s, want);
+}
+
+static void test_hmac(void)
+{
+    uint8_t key[131], out[32];
+    memset(key, 0x0b, 20);
+    hmac_sha256(key, 20, "Hi There", 8, out);
+    CHECK(is_hex(out, "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"));
+    hmac_sha256((const uint8_t *)"Jefe", 4, "what do ya want for nothing?", 28, out);
+    CHECK(is_hex(out, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"));
+    /* a key longer than a block is hashed first (RFC 4231, test case 6) */
+    const char *m = "Test Using Larger Than Block-Size Key - Hash Key First";
+    memset(key, 0xaa, sizeof key);
+    hmac_sha256(key, sizeof key, m, strlen(m), out);
+    CHECK(is_hex(out, "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"));
+}
+
+static int same_prog(const vm_t *a, const vm_t *b)
+{
+    if (a->n != b->n)
+        return 0;
+    for (int i = 0; i < a->n; i++) {
+        const vm_ins *x = &a->prog[i], *y = &b->prog[i];
+        if (x->op != y->op || x->a.kind != y->a.kind || x->a.v != y->a.v || x->b.kind != y->b.kind ||
+            x->b.v != y->b.v)
+            return 0;
+    }
+    return 1;
+}
+
+/* what the executor relies on without checking: registers a..d, ports that exist, jumps up to the end */
+static int in_bounds(const vm_t *v)
+{
+    for (int i = 0; i < v->n; i++) {
+        const vm_arg *ops[2] = {&v->prog[i].a, &v->prog[i].b};
+        for (int j = 0; j < 2; j++) {
+            const vm_arg *a = ops[j];
+            if (a->kind > K_LABEL || (a->kind == K_REG && a->v > 3) || (a->kind == K_PORT && a->v >= P__N) ||
+                (a->kind == K_LABEL && a->v > v->n))
+                return 0;
+        }
+    }
+    return v->n <= VM_MAX_INSTR;
+}
+
+static uint32_t lcg_next(uint32_t *s)
+{
+    *s = *s * 1664525u + 1013904223u;
+    return *s >> 8;
+}
+
+static void test_code(void)
+{
+    static vm_t a, b;
+    uint8_t code[VM_CODE_MAX], again[VM_CODE_MAX];
+    char err[96];
+    /* every kind of operand, two numbers in one compare, a label after the last instruction */
+    CHECK(vm_assemble(&a, "top: mov 0xffff a\neq 5 700\njf end\nmov btn b\nadd lux b\nnot c\nrev d\ncnt rnd a\n"
+                          "mov 3 ea\nmov 7 ed\nmov ed row\nshr 4 pix\nwait clk\njt top\njmp end\nhalt\nend:\n",
+                      err, sizeof err) == 0);
+    int len = vm_encode(&a, code);
+    CHECK(len == 52 && !vm_decode(&b, code, len) && same_prog(&a, &b));
+    CHECK(vm_encode(&b, again) == len && !memcmp(code, again, (size_t)len));
+    CHECK(b.prog[2].a.kind == K_LABEL && b.prog[2].a.v == b.n);
+    uint8_t nops[VM_MAX_INSTR + 1];
+    memset(nops, OP_NOP, sizeof nops);
+    CHECK(!vm_decode(&b, nops, VM_MAX_INSTR) && b.n == VM_MAX_INSTR && vm_decode(&b, nops, VM_MAX_INSTR + 1));
+    /* only what the assembler could have made */
+    static const struct { uint8_t len, code[6]; } bad[] = {
+        {1, {OP__N}},                    /* no such instruction */
+        {3, {OP_MOV, 0x04, 0x00}},       /* register e */
+        {3, {OP_MOV, 0x18, 0x00}},       /* port 8 */
+        {5, {OP_MOV, 0x20, 0, 1, 0x10}}, /* into btn, which is read-only */
+        {5, {OP_MOV, 0x00, 0x20, 0, 1}}, /* into a number */
+        {2, {OP_JMP, 2}},                /* past the end */
+        {3, {OP_WAIT, 0x20, 0}},         /* a number cut short */
+        {2, {OP_MOV, 0x00}},             /* an operand missing */
+        {2, {OP_WAIT, 0x21}},            /* no such operand */
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++)
+        CHECK(vm_decode(&b, bad[i].code, bad[i].len) == -1);
+    uint8_t to_end[] = {OP_JMP, 1};
+    CHECK(!vm_decode(&b, to_end, 2) && b.n == 1);
+    /* bytes from outside, random or a program with a few bytes changed: whatever is taken is what
+       vm_encode makes, stays in bounds, and runs */
+    uint32_t s = 12345;
+    int taken = 0, bad_take = 0;
+    for (int round = 0; round < 100000; round++) {
+        uint8_t in[64];
+        int n;
+        if (round & 1) {
+            n = len;
+            memcpy(in, code, (size_t)n);
+            for (int k = 0; k < 3; k++)
+                in[lcg_next(&s) % (uint32_t)n] = (uint8_t)lcg_next(&s);
+        } else {
+            n = (int)(lcg_next(&s) % 40);
+            for (int k = 0; k < n; k++)
+                in[k] = (uint8_t)lcg_next(&s);
+        }
+        if (vm_decode(&b, in, n))
+            continue;
+        taken++;
+        if (!in_bounds(&b) || vm_encode(&b, again) != n || memcmp(in, again, (size_t)n))
+            bad_take++;
+        vm_reset(&b, 7);
+        for (int k = 0; k < 20; k++)
+            vm_tick(&b);
+    }
+    CHECK(taken > 1000 && !bad_take);
+}
+
+static void test_token(void)
+{
+    uint8_t key[32], other[32], bin[TOKEN_BIN_MAX], sols[TOKEN_SOLS_MAX];
+    char text[TOKEN_TEXT_MAX];
+    token_parts t;
+    uint16_t n = 0;
+    int len;
+    token_card_key(test_randid, key);
+    CHECK(is_hex(key, "edea6373c65c49344c370445cb3b091eafe000d733d0b936f891bbaf6030fd22"));
+    /* one entry a task, in task order, the newest program in place of the old one */
+    uint8_t nop = OP_NOP, nop_halt[] = {OP_NOP, OP_HALT};
+    CHECK(!token_put(sols, &n, 2, &nop, 1) && !token_put(sols, &n, 1, nop_halt + 1, 1));
+    CHECK(!token_put(sols, &n, 1, nop_halt, 2));
+    static const uint8_t want[] = {1, 2, OP_NOP, OP_HALT, 2, 1, OP_NOP};
+    CHECK(n == sizeof want && !memcmp(sols, want, sizeof want));
+    CHECK(token_find(sols, n, 2, &len) == sols + 6 && len == 1 && !token_find(sols, n, 3, &len));
+    /* byte for byte what token.h describes, as an independent implementation (Python's hmac and base64)
+       made it */
+    CHECK(token_make(test_chipid, key, sols, n, text) == 43);
+    CHECK(!strcmp(text, "AQECAwQFBgcIAQISEwIBEjgNJk0vwWidoANKpOWPoWc"));
+    CHECK(!token_read(text, bin, &t) && !memcmp(t.chipid, test_chipid, 8) && t.sols_len == n &&
+          !memcmp(t.sols, sols, n) && !token_check(&t, key));
+    /* another card's key, a changed character, a stray bit, a cut: not this card's token */
+    uint8_t randid2[16];
+    memcpy(randid2, test_randid, 16);
+    randid2[15] ^= 1;
+    token_card_key(randid2, other);
+    CHECK(token_check(&t, other) == -1);
+    text[20] = text[20] == 'A' ? 'B' : 'A';
+    CHECK(token_read(text, bin, &t) || token_check(&t, key));
+    token_make(test_chipid, key, sols, n, text);
+    text[42] = 'd';
+    CHECK(token_read(text, bin, &t) == -1);
+    token_make(test_chipid, key, sols, n, text);
+    text[42] = 0;
+    CHECK(token_read(text, bin, &t) || token_check(&t, key));
+    CHECK(token_read("A", bin, &t) == -1 && token_read("AQECAwQF", bin, &t) == -1 && token_read("AQEC+", bin, &t) == -1);
+    /* no room: the entries never outgrow what the state keeps */
+    uint8_t big[255] = {0};
+    n = 0;
+    while (!token_put(sols, &n, n / 257 + 1, big, 255))
+        ;
+    CHECK(n <= TOKEN_SOLS_MAX && n + 257 > TOKEN_SOLS_MAX && token_entries_ok(sols, n));
+}
+
+static void enter_prog(const char *src)
+{
+    type("edit\r");
+    for (const char *p = src; *p; p++)
+        shell_input(*p == '\n' ? '\r' : *p);
+    type(".\r");
+}
+
+/* the link top printed, its token into bin */
+static int top_token(uint8_t *bin, token_parts *t)
+{
+    static char text[TOKEN_TEXT_MAX];
+    const char *p = strstr(outbuf, "https://keetsta.me/mk1/top#");
+    if (!p)
+        return -1;
+    p += strlen("https://keetsta.me/mk1/top#");
+    size_t n = strcspn(p, "\r\n");
+    if (n >= sizeof text)
+        return -1;
+    memcpy(text, p, n);
+    text[n] = 0;
+    return token_read(text, bin, t);
+}
+
+/* the program kept for task t passes it and has n instructions */
+static int kept(const token_parts *tk, int t, int n)
+{
+    static vm_t v;
+    task_result res;
+    int len;
+    const uint8_t *code = token_find(tk->sols, tk->sols_len, t, &len);
+    if (!code || vm_decode(&v, code, len) || v.n != n)
+        return 0;
+    task_run(&TASKS[t - 1], &v, CONTENT_CHK[t - 1], NULL, &res);
+    return res.passed == res.segs;
+}
+
+static void test_board(const char *dir)
+{
+    static uint8_t bin[TOKEN_BIN_MAX];
+    static char lamp_nop[sizeof LAMP + 8];
+    token_parts tk;
+    uint8_t key[32];
+    char path[512], err[96], *sol2;
+    token_card_key(test_randid, key);
+    snprintf(lamp_nop, sizeof lamp_nop, "%snop\n", LAMP);
+    fake_rows = 0;
+    store_n = 0;
+    shell_init();
+    type("top\r");
+    CHECK(said("only a real mk-1 card can go on the board"));
+    shell_card(test_chipid, test_randid);
+    type("top\r");
+    CHECK(said("the board opens once every task is solved: 0 of"));
+    /* the best program is kept: a shorter one replaces it, a longer one does not */
+    enter_prog(lamp_nop);
+    type("check\r");
+    CHECK(said("task 1 passed: 12 instructions"));
+    type("task 1\r");
+    enter_prog(LAMP);
+    type("check\r");
+    CHECK(said("task 1 passed: 11 instructions"));
+    type("task 1\r");
+    enter_prog(lamp_nop);
+    type("check\r");
+    CHECK(said("task 1 passed: 12 instructions"));
+    snprintf(path, sizeof path, "%s/sol2.asm", dir);
+    if (!(sol2 = slurp(path)))
+        return;
+    type("task 2\r");
+    enter_prog(sol2);
+    type("check\r");
+    CHECK(said("task 2 passed"));
+    type("top\r");
+    CHECK(!top_token(bin, &tk) && !memcmp(tk.chipid, test_chipid, 8) && !token_check(&tk, key));
+    CHECK(vm_assemble(&vm, sol2, err, sizeof err) == 0);
+    CHECK(kept(&tk, 1, 11) && kept(&tk, 2, vm.n));
+
+    /* a card that played on the firmware before the board: its chapters stay, its programs are asked for */
+    struct {
+        uint32_t magic;
+        uint8_t unlocked, task;
+        uint16_t solved;
+        uint8_t keys[16][32];
+        char prog[2048];
+    } old;
+    _Static_assert(sizeof old == 2568, "the state the firmware before the board saved");
+    task_result res;
+    memset(&old, 0, sizeof old);
+    old.magic = 0x4d4b3102u;
+    old.unlocked = 2;
+    old.task = 2;
+    old.solved = 1 << 1;
+    CHECK(vm_assemble(&vm, LAMP, err, sizeof err) == 0);
+    task_run(&TASKS[0], &vm, CONTENT_CHK[0], NULL, &res);
+    task_key(res.hash, old.keys[1]);
+    strcpy(old.prog, "nop\n");
+    memcpy(store, &old, sizeof old);
+    store_n = sizeof old;
+    shell_init();
+    type("tasks\r");
+    CHECK(said("1  lamp     solved") && said("> 2  level    open"));
+    type("man 1\r");
+    CHECK(said("chapter 1. bits"));
+    type("list\r");
+    CHECK(said(" 1| nop"));
+    type("top\r");
+    CHECK(said("1 of 2 so far"));
+    enter_prog(sol2);
+    type("check\r");
+    type("top\r");
+    CHECK(said("check task 1 again: the board needs its program"));
+    type("task 1\r");
+    enter_prog(LAMP);
+    type("check\r");
+    type("top\r");
+    CHECK(!top_token(bin, &tk) && !token_check(&tk, key) && kept(&tk, 1, 11));
+    CHECK(store_n > sizeof old && store_n <= HAL_STATE_MAX);
 }
 
 int main(int argc, char **argv)
@@ -545,6 +852,11 @@ int main(int argc, char **argv)
     CHECK(said("a program is running, ctrl-c stops") && !said("mk1> "));
     type("\x03");
     CHECK(!shell_running());
+
+    test_hmac();
+    test_code();
+    test_token();
+    test_board(dir);
 
     printf("%d checks, %d failed\n", checks, fails);
     return fails != 0;

@@ -1,6 +1,7 @@
 #include "shell.h"
 
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,13 +11,15 @@
 #include "font.h"
 #include "hal.h"
 #include "tasks.h"
+#include "token.h"
 #include "vm.h"
 
 #define SH_LINE 128
 #define HIST_N 16
 #define MAX_CHAPTERS 16
 #define CHAPTER_MAX 8192
-#define STATE_MAGIC 0x4d4b3102u
+#define STATE_MAGIC 0x4d4b3103u
+#define STATE_MAGIC_2 0x4d4b3102u  /* the state before the board, without the programs */
 #define MARQUEE_TICKS 3            /* 60 ms per column */
 
 /* everything that survives a power cycle */
@@ -27,7 +30,23 @@ typedef struct {
     uint16_t solved;               /* bit t = task t solved */
     uint8_t keys[MAX_CHAPTERS][32];
     char prog[VM_SRC_MAX];
+    uint16_t sols_len;
+    uint8_t sols[TOKEN_SOLS_MAX];  /* the best program of every solved task, for the board (token.h) */
 } saved;
+
+/* the same without the programs; a card that played before keeps its chapters */
+typedef struct {
+    uint32_t magic;
+    uint8_t unlocked;
+    uint8_t task;
+    uint16_t solved;
+    uint8_t keys[MAX_CHAPTERS][32];
+    char prog[VM_SRC_MAX];
+} saved_2;
+
+_Static_assert(sizeof(saved_2) == 2568 && offsetof(saved, sols_len) == sizeof(saved_2),
+               "the old state is the start of the new one, byte for byte");
+_Static_assert(sizeof(saved) <= HAL_STATE_MAX, "the state must fit the card's flash sector");
 
 /* In the dump in plain text, and printed by the commands people reach for first.
  * The dragon is ASCII art by Jcro...@vt.edu (its signature lives here, not on screen),
@@ -66,6 +85,7 @@ static const char HELP[] =
     "  list        show the program\n"
     "  run         run it on the card, ctrl-c stops\n"
     "  check       test it against the task\n"
+    "  top         a link that puts this card on the board\n"
     "  try <ins>   run one instruction right now\n"
     "  regs        what try has left in the registers\n"
     "  cls         clear the terminal\n"
@@ -94,6 +114,8 @@ static uint8_t screen[VM_ROWS * 16]; /* levels 0..15, row 0 first, left to right
 static uint8_t chbuf[CHAPTER_MAX];
 static const char *more_p;         /* what the pager has not shown yet */
 static uint32_t more_left;
+static int card;                   /* the platform gave the card's identity: top can sign */
+static uint8_t card_id[8], card_key[32];
 
 /* ---- output -------------------------------------------------------------------- */
 
@@ -317,6 +339,49 @@ static void cmd_task(const char *arg)
     outf("task %d: %s. it is described in man %d\n", t, TASKS[t - 1].name, t - 1);
 }
 
+/* the board gets each task's best program so far: the shortest, then the fastest. A stand-in until goals
+   with points decide what best means (SPEC.md). The program in `checker` has just passed task t */
+static void keep_best(int t, uint32_t cycles)
+{
+    static uint8_t code[VM_CODE_MAX];
+    static vm_t kept;
+    static task_result r;
+    int old_len;
+    const uint8_t *old = token_find(st.sols, st.sols_len, t, &old_len);
+    if (old && !vm_decode(&kept, old, old_len)) {
+        task_run(&TASKS[t - 1], &kept, CONTENT_CHK[t - 1], NULL, &r);
+        if (r.passed == r.segs && (kept.n < checker.n || (kept.n == checker.n && r.cycles <= cycles)))
+            return;
+    }
+    if (token_put(st.sols, &st.sols_len, t, code, vm_encode(&checker, code)))
+        out("no room left to keep this program for the board\n");
+}
+
+static void cmd_top(void)
+{
+    static char text[TOKEN_TEXT_MAX];
+    int solved = 0, total = 0, len;
+    if (!card) {
+        out("only a real mk-1 card can go on the board\n");
+        return;
+    }
+    for (int t = 1; t <= N_TASKS && t <= CONTENT_N_TASKS; t++, total++)
+        solved += st.solved >> t & 1;
+    if (solved < total) {
+        outf("the board opens once every task is solved: %d of %d so far\n", solved, total);
+        return;
+    }
+    for (int t = 1; t <= total; t++)
+        if (!token_find(st.sols, st.sols_len, t, &len)) {
+            outf("check task %d again: the board needs its program, and the old firmware kept none\n", t);
+            return;
+        }
+    token_make(card_id, card_key, st.sols, st.sols_len, text);
+    out("this card on the board:\nhttps://keetsta.me/mk1/top#");
+    out(text);
+    out("\n");
+}
+
 static void cmd_check(void)
 {
     char err[96];
@@ -346,6 +411,7 @@ static void cmd_check(void)
     outf("task %d passed: %d instructions, %lu cycles in %lu ticks\n", t, checker.n, (unsigned long)res.cycles,
          (unsigned long)res.ticks);
     st.solved |= (uint16_t)(1u << t);
+    keep_best(t, res.cycles);
     if (t < CONTENT_N_CHAPTERS && t < MAX_CHAPTERS && CONTENT_CHAPTERS[t].locked) {
         if (st.unlocked <= t) {
             task_key(res.hash, st.keys[t]);
@@ -515,6 +581,8 @@ static void command(char *l)
         cmd_run();
     else if (!strcmp(l, "check"))
         cmd_check();
+    else if (!strcmp(l, "top"))
+        cmd_top();
     else if (!strcmp(l, "try"))
         cmd_try(arg);
     else if (!strcmp(l, "regs"))
@@ -849,15 +917,37 @@ void shell_disconnect(void) { web = 0; }
 
 int shell_running(void) { return mode == M_RUN; }
 
+void shell_card(const uint8_t chipid[8], const uint8_t randid[16])
+{
+    memcpy(card_id, chipid, sizeof card_id);
+    token_card_key(randid, card_key);
+    card = 1;
+}
+
+/* the state as it was saved, or the state from before the board with no programs kept yet */
+static int load(void)
+{
+    static saved_2 old;
+    if (hal_load(&st, sizeof st) && st.magic == STATE_MAGIC)
+        return 1;
+    if (!hal_load(&old, sizeof old) || old.magic != STATE_MAGIC_2)
+        return 0;
+    memset(&st, 0, sizeof st);
+    memcpy(&st, &old, sizeof old);
+    st.magic = STATE_MAGIC;
+    return 1;
+}
+
 void shell_init(void)
 {
-    if (!hal_load(&st, sizeof st) || st.magic != STATE_MAGIC || st.unlocked < 1 ||
-        st.unlocked > CONTENT_N_CHAPTERS || st.unlocked > MAX_CHAPTERS) {
+    if (!load() || st.unlocked < 1 || st.unlocked > CONTENT_N_CHAPTERS || st.unlocked > MAX_CHAPTERS) {
         memset(&st, 0, sizeof st);
         st.magic = STATE_MAGIC;
         st.unlocked = 1;
         st.task = 1;
     }
+    if (st.sols_len > TOKEN_SOLS_MAX || !token_entries_ok(st.sols, st.sols_len))
+        st.sols_len = 0;
     st.prog[VM_SRC_MAX - 1] = 0;
     if (!task_open(st.task))
         st.task = 1;

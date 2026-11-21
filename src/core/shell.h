@@ -26,5 +26,8 @@ void shell_screen(const uint8_t lum[9][16]);
 void shell_screen_rows(const uint16_t rows[9]);
 /* the terminal went away (DTR dropped on the card): stop sending frames to the web page */
 void shell_disconnect(void);
+/* the card's identity for the board (token.h): the chip id and the factory RANDID from OTP, from which the
+   card key is made. Only the card has them; without this call `top` says there is no card to sign with */
+void shell_card(const uint8_t chipid[8], const uint8_t randid[16]);
 
 #endif

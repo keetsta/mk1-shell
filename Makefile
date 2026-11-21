@@ -1,7 +1,7 @@
 CC ?= cc
 CFLAGS ?= -std=c11 -Wall -Wextra -Wpedantic -O2 -g
 
-CORE = src/core/vm.c src/core/sha256.c src/core/tasks.c src/core/font.c src/core/shell.c
+CORE = src/core/vm.c src/core/sha256.c src/core/tasks.c src/core/token.c src/core/font.c src/core/shell.c
 HDRS = $(wildcard src/core/*.h)
 # the card's screen, light, panel and flash store: no hardware, so they build here too. The card's own screens
 # are src/card/own.c; the demo firmware has demo/own.c in their place

@@ -21,7 +21,10 @@ int hal_rows(void);
 /* ^D at an empty prompt. The emulator quits; the card goes back to its idle screen, and the shell
    carries on as soon as someone types again */
 void hal_exit(void);
-/* persistent state (unlocked chapters, the program); load returns 0 if there is nothing valid */
+/* persistent state (unlocked chapters, the program); load returns 0 unless a valid state of exactly n bytes
+   is there. HAL_STATE_MAX is the most save is handed: the card keeps the state in one 4 KB flash sector and
+   drops anything bigger without a word */
+#define HAL_STATE_MAX 4080
 int hal_load(void *buf, size_t n);
 void hal_save(const void *buf, size_t n);
 

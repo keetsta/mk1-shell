@@ -13,6 +13,7 @@
 #include "hardware/flash.h"
 #include "hardware/gpio.h"
 #include "hardware/i2c.h"
+#include "hardware/regs/otp_data.h"
 #include "hardware/structs/ioqspi.h"
 #include "hardware/structs/powman.h"
 #include "hardware/structs/sio.h"
@@ -23,6 +24,7 @@
 #include "pico/stdio/driver.h"
 #include "pico/stdio_usb.h"
 #include "pico/stdlib.h"
+#include "pico/unique_id.h"
 
 #include "../core/hal.h"
 #include "../core/shell.h"
@@ -82,6 +84,8 @@ static int fl_program(uint32_t off, const uint8_t *data, uint32_t len) {
 
 static const uint8_t *fl_read(uint32_t off) { return (const uint8_t *)(XIP_BASE + off); }
 
+static_assert(HAL_STATE_MAX <= STORE_MAX, "a shell state the store can't hold would be dropped on every save");
+
 /* the last 32 KB of the 16 MB flash: far past the program, and a new .uf2 never touches it */
 static store_t store = {
     .base = PICO_FLASH_SIZE_BYTES - STORE_SECTORS * STORE_SECTOR,
@@ -112,6 +116,22 @@ int hal_rows(void) { return 0; }
 void hal_exit(void) { face_exit(); }
 int hal_load(void *buf, size_t n) { return store_load(&store, buf, (uint32_t)n); }
 void hal_save(const void *buf, size_t n) { store_save(&store, buf, (uint32_t)n); }
+
+/* The card's identity for the board (token.h): the chip id in the order the USB serial number spells it, and
+ * RANDID, 128 random bits the factory left in OTP rows 0x004..0x00b. Page 0 of OTP stays readable to any
+ * firmware through the window that corrects ECC, 16 bits a row; token.h takes each row low byte first */
+static void card_identity(void) {
+    pico_unique_board_id_t id;
+    uint8_t randid[16];
+    const volatile uint16_t *otp = (const volatile uint16_t *)OTP_DATA_BASE;
+    pico_get_unique_board_id(&id);
+    for (int i = 0; i < 8; i++) {
+        uint16_t row = otp[OTP_DATA_RANDID0_ROW + i];
+        randid[2 * i] = (uint8_t)row;
+        randid[2 * i + 1] = (uint8_t)(row >> 8);
+    }
+    shell_card(id.id, randid);
+}
 
 /* ---- devices ----------------------------------------------------------------- */
 
@@ -195,6 +215,7 @@ int main(void) {
 
     uint64_t t0 = time_us_64(), next_tick = t0, next_button = t0, next_retry = t0, link_at = t0;
     face_init(0);
+    card_identity();
     shell_init();
     watchdog_enable(WATCHDOG_MS, true);
 

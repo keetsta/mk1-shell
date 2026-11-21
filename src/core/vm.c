@@ -442,3 +442,85 @@ void vm_tick(vm_t *vm)
 done:
     vm->dev.clk++;
 }
+
+/* ---- code ---------------------------------------------------------------------- */
+
+static int put_arg(uint8_t *out, int k, const vm_arg *a)
+{
+    switch (a->kind) {
+    case K_REG:
+    case K_LABEL: out[k++] = (uint8_t)a->v; break;
+    case K_PORT: out[k++] = (uint8_t)(0x10 + a->v); break;
+    case K_LIT:
+        out[k++] = 0x20;
+        out[k++] = (uint8_t)(a->v >> 8);
+        out[k++] = (uint8_t)a->v;
+        break;
+    }
+    return k;
+}
+
+int vm_encode(const vm_t *vm, uint8_t out[VM_CODE_MAX])
+{
+    int k = 0;
+    for (int i = 0; i < vm->n; i++) {
+        const vm_ins *in = &vm->prog[i];
+        const char *sig = SIG[in->op];
+        out[k++] = in->op;
+        if (sig[0])
+            k = put_arg(out, k, &in->a);
+        if (sig[0] && sig[1])
+            k = put_arg(out, k, &in->b);
+    }
+    return k;
+}
+
+/* the executor indexes registers and ports with these values unchecked: only what parse_ins allows passes */
+static int get_arg(const uint8_t *code, int len, int *k, char sig, vm_arg *a)
+{
+    if (*k >= len)
+        return -1;
+    uint8_t b = code[(*k)++];
+    if (sig == 'l') {
+        a->kind = K_LABEL;   /* the target is checked once the length of the program is known */
+        a->v = b;
+    } else if (b < 4) {
+        a->kind = K_REG;
+        a->v = b;
+    } else if (b >= 0x10 && b < 0x10 + P__N && (sig == 's' || PORT_WRITABLE[b - 0x10])) {
+        a->kind = K_PORT;
+        a->v = (uint16_t)(b - 0x10);
+    } else if (b == 0x20 && sig == 's' && *k + 2 <= len) {
+        a->kind = K_LIT;
+        a->v = (uint16_t)(code[*k] << 8 | code[*k + 1]);
+        *k += 2;
+    } else {
+        return -1;
+    }
+    return 0;
+}
+
+int vm_decode(vm_t *vm, const uint8_t *code, int len)
+{
+    int n = 0, k = 0;
+    vm->n = 0;
+    vm->state = VM_IDLE;
+    while (k < len) {
+        if (n == VM_MAX_INSTR || code[k] >= OP__N)
+            return -1;
+        vm_ins *in = &vm->prog[n++];
+        memset(in, 0, sizeof *in);
+        in->op = code[k++];
+        const char *sig = SIG[in->op];
+        if (sig[0] && get_arg(code, len, &k, sig[0], &in->a))
+            return -1;
+        if (sig[0] && sig[1] && get_arg(code, len, &k, sig[1], &in->b))
+            return -1;
+    }
+    /* a label after the last instruction is the program's end: jumping there halts it */
+    for (int i = 0; i < n; i++)
+        if (vm->prog[i].a.kind == K_LABEL && vm->prog[i].a.v > n)
+            return -1;
+    vm->n = (uint8_t)n;
+    return 0;
+}
