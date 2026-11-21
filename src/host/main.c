@@ -48,6 +48,7 @@ void hal_matrix(const uint16_t r[VM_ROWS])
 {
     memcpy(rows, r, sizeof rows);
     dirty = 1;
+    shell_screen_rows(r);
 }
 
 int hal_button(void) { return btn; }

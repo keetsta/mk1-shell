@@ -81,6 +81,7 @@ void hal_write(const char *s, size_t n)
 void hal_matrix(const uint16_t r[9])
 {
     memcpy(matrix, r, sizeof matrix);
+    shell_screen_rows(r);
     for (int i = 0; i < 9; i++)
         if (r[i])
             matrix_lit = 1;
@@ -471,23 +472,44 @@ int main(int argc, char **argv)
     type("man 0\r");
     CHECK(said("task 1. lamp") && !said("-- more"));
 
-    /* the web page protocol: hello turns frames on, every change of the matrix goes out as an OSC */
+    /* the web page protocol: hello turns frames on, every change of the screen goes out as an OSC, one
+       level 0..f per LED */
+    char frame[64 + 144], levels[145];
+    memset(levels, '0', 144);
+    levels[144] = 0;
     type("try mov 0 pix\r");
     type("\x1b]7777;hello\a");
-    CHECK(said("\x1b]7777;mk1;1;" MK1_VERSION "\a") && said("\x1b]7777;f;000000000000000000000000000000000000\a"));
+    snprintf(frame, sizeof frame, "\x1b]7777;f;%s\a", levels);
+    CHECK(said("\x1b]7777;mk1;2;" MK1_VERSION "\a") && said(frame));
     type("try mov 0xffff pix\r");
-    CHECK(said("\x1b]7777;f;ffff00000000000000000000000000000000\a"));
+    memset(levels, 'f', 16);
+    snprintf(frame, sizeof frame, "\x1b]7777;f;%s\a", levels);
+    CHECK(said(frame));
+    /* a platform whose screen is more than the shell's matrix (the card's own screens): levels, rounded */
+    {
+        uint8_t lum[9][16] = {{0}};
+        lum[0][0] = 255, lum[0][1] = 77, lum[8][15] = 8;
+        type("");
+        shell_screen(lum);
+        memset(levels, '0', 144);
+        levels[0] = 'f', levels[1] = '5';
+        snprintf(frame, sizeof frame, "\x1b]7777;f;%s\a", levels);
+        CHECK(said(frame));
+        type("");
+        shell_screen(lum);
+        CHECK(!said("\x1b]7777;f;"));
+    }
     /* the card has no buzzer, so the chip has no port for one */
     type("try mov 440 bz\r");
     CHECK(said("what is 'bz'?"));
     /* the OSC never reaches the line: typed in the middle of a word, the word still runs */
     type("he\x1b]7777;hello\alp\r");
-    CHECK(said("man [n]") && said("\x1b]7777;mk1;1;" MK1_VERSION "\a"));
+    CHECK(said("man [n]") && said("\x1b]7777;mk1;2;" MK1_VERSION "\a"));
     /* in a running program too, and ESC \ ends one as well as BEL */
     type("edit\rtop: mov clk a\rwait 1\rjmp top\r.\rrun\r");
     CHECK(shell_running());
     type("\x1b]7777;hello\x1b\\");
-    CHECK(shell_running() && said("\x1b]7777;mk1;1;" MK1_VERSION "\a"));
+    CHECK(shell_running() && said("\x1b]7777;mk1;2;" MK1_VERSION "\a"));
     type("\x03");
     /* other OSCs and overlong ones are dropped without a trace */
     type("\x1b]0;title\a\x1b]7777;helloooooooooooooooooooooooooooooooooooooooooo\a");
@@ -504,6 +526,25 @@ int main(int argc, char **argv)
     type("help\r\x1b[A");
     CHECK(!strcmp(shown(), "mk1> help"));
     type("\x03");
+
+    /* a terminal that opens the port late gets the banner and the line as it stands, cursor included */
+    type("tsks\x1b[D\x1b[D\x1b[D");
+    outlen = 0;
+    outbuf[0] = 0;
+    shell_connect();
+    CHECK(said("mk-1. type help") && !strcmp(shown(), "mk1> tsks"));
+    type("a");
+    CHECK(!strcmp(shown(), "mk1> tasks"));
+    type("\r");
+    CHECK(said("1  lamp"));
+    type("edit\rtop: wait 1\rjmp top\r.\rrun\r");
+    CHECK(shell_running());
+    outlen = 0;
+    outbuf[0] = 0;
+    shell_connect();
+    CHECK(said("a program is running, ctrl-c stops") && !said("mk1> "));
+    type("\x03");
+    CHECK(!shell_running());
 
     printf("%d checks, %d failed\n", checks, fails);
     return fails != 0;

@@ -56,6 +56,7 @@ static const char DRAGON[] =
     "   \\__,_||_|   \\__,_| \\__, | \\___/ |_| |_||___/(_)\n"
     "                      |___/\n";
 static const char DRAGONS[] = "there will be dragons!";
+static const char BANNER[] = "\nmk-1. type help\n";
 
 static const char HELP[] =
     "  man [n]     the manual, chapter n\n"
@@ -85,9 +86,11 @@ static marquee mq;
 static int mq_on, mq_div;
 static uint16_t shown[VM_ROWS];
 /* the web page (keetsta.me/mk1) protocol, see SPEC.md: an OSC from the page turns web mode on, and then
-   every frame of the matrix goes back to it as an OSC the page's terminal hides */
+   every change of what the card's screen shows goes back to it as an OSC the page's terminal hides. The
+   platform says what that is (shell_screen): on the card it is not always the shell's matrix */
 static int web, osc_st, osc_len;
 static char osc[40];
+static uint8_t screen[VM_ROWS * 16]; /* levels 0..15, row 0 first, left to right */
 static uint8_t chbuf[CHAPTER_MAX];
 static const char *more_p;         /* what the pager has not shown yet */
 static uint32_t more_left;
@@ -129,15 +132,38 @@ static void prompt(void)
         outf("%2d| ", editn + 1);
 }
 
-/* ESC ] 7777 ; f ; <9 rows, 4 hex digits each, row 0 first> BEL */
+/* ESC ] 7777 ; f ; <144 hex digits, one level per LED, row 0 first, left to right> BEL */
 static void send_frame(void)
 {
-    char b[64];
-    int k = snprintf(b, sizeof b, "\x1b]7777;f;");
-    for (int r = 0; r < VM_ROWS; r++)
-        k += snprintf(b + k, sizeof b - (size_t)k, "%04x", shown[r]);
-    b[k++] = '\a';
-    hal_write(b, (size_t)k);
+    static const char HEX[] = "0123456789abcdef", HEAD[] = "\x1b]7777;f;";
+    char b[sizeof HEAD - 1 + sizeof screen + 1];
+    memcpy(b, HEAD, sizeof HEAD - 1);
+    for (size_t i = 0; i < sizeof screen; i++)
+        b[sizeof HEAD - 1 + i] = HEX[screen[i]];
+    b[sizeof b - 1] = '\a';
+    hal_write(b, sizeof b);
+}
+
+void shell_screen(const uint8_t lum[VM_ROWS][16])
+{
+    uint8_t next[sizeof screen];
+    for (int y = 0; y < VM_ROWS; y++)
+        for (int x = 0; x < 16; x++)
+            next[y * 16 + x] = (uint8_t)((lum[y][x] * 15 + 127) / 255);
+    if (memcmp(next, screen, sizeof screen)) {
+        memcpy(screen, next, sizeof screen);
+        if (web)
+            send_frame();
+    }
+}
+
+void shell_screen_rows(const uint16_t rows[VM_ROWS])
+{
+    uint8_t lum[VM_ROWS][16];
+    for (int y = 0; y < VM_ROWS; y++)
+        for (int x = 0; x < 16; x++)
+            lum[y][x] = rows[y] >> (15 - x) & 1 ? 255 : 0;
+    shell_screen(lum);
 }
 
 static void show(const uint16_t rows[VM_ROWS])
@@ -145,8 +171,6 @@ static void show(const uint16_t rows[VM_ROWS])
     if (memcmp(rows, shown, sizeof shown)) {
         memcpy(shown, rows, sizeof shown);
         hal_matrix(shown);
-        if (web)
-            send_frame();
     }
 }
 
@@ -761,7 +785,7 @@ static void osc_end(void)
     osc[osc_len] = 0;
     if (!strcmp(osc, "7777;hello")) {
         web = 1;
-        out("\x1b]7777;mk1;1;" MK1_VERSION "\a");
+        out("\x1b]7777;mk1;2;" MK1_VERSION "\a");
         send_frame();
     } else if (!strcmp(osc, "7777;bye")) {
         web = 0;
@@ -807,6 +831,20 @@ void shell_input(char c)
     key_input(c);
 }
 
+void shell_connect(void)
+{
+    out(BANNER);
+    if (mode == M_RUN) {
+        out("a program is running, ctrl-c stops\n");
+    } else if (mode == M_MORE) {
+        out(MORE);
+    } else {
+        prompt();
+        hal_write(line, (size_t)len);
+        back(len - cur);
+    }
+}
+
 void shell_disconnect(void) { web = 0; }
 
 int shell_running(void) { return mode == M_RUN; }
@@ -826,6 +864,6 @@ void shell_init(void)
     vm_reset(&bench, 0x1234);
     bench.state = VM_IDLE;
     mode = M_LINE;
-    out("\nmk-1. type help\n");
+    out(BANNER);
     prompt();
 }
