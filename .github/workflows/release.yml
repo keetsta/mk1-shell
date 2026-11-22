@@ -39,6 +39,7 @@ jobs:
             exit 1
           fi
           bash tools/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/mk1-release-notes.md"
+          bash tools/release-notices.sh "$GITHUB_REF_NAME" >> "$RUNNER_TEMP/mk1-release-notes.md"
       - uses: ./.github/actions/setup-firmware
       - name: Test and build firmware
         run: |
@@ -56,7 +57,7 @@ jobs:
           if ! gh release view "$GITHUB_REF_NAME" --json tagName >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
               --notes-file "$RUNNER_TEMP/mk1-release-notes.md" \
-              build/card/mk1.uf2 build/card/mk1-demo.uf2 LICENSE THIRD_PARTY_NOTICES.md
+              build/card/mk1.uf2 build/card/mk1-demo.uf2
           fi
           main_digest=$(sha256sum build/card/mk1.uf2 | cut -d ' ' -f 1)
           demo_digest=$(sha256sum build/card/mk1-demo.uf2 | cut -d ' ' -f 1)
