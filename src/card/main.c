@@ -3,8 +3,9 @@
  *
  * One core, one loop: terminal input goes to the shell as it arrives, the button is sampled every 5 ms, and
  * every 20 ms the shell ticks, the face draws and the matrix gets the frame if it changed. TinyUSB runs from
- * the SDK's background interrupt (pico_stdio_usb), which also reboots into BOOTSEL on a 1200 baud open.
- * Nothing in the loop waits on a device: a missing matrix is retried, a failed save is dropped.
+ * the SDK's background interrupt (pico_stdio_usb); a 1200 baud open makes the loop hand the matrix its update
+ * loop and reboot into BOOTSEL. Nothing in the loop waits on a device: a missing matrix is retried, a failed
+ * save is dropped.
  */
 #include <stddef.h>
 #include <string.h>
@@ -20,11 +21,15 @@
 #include "hardware/sync.h"
 #include "hardware/watchdog.h"
 #include "pico/binary_info.h"
+#include "pico/bootrom.h"
 #include "pico/flash.h"
+#include "pico/rand.h"
 #include "pico/stdio/driver.h"
 #include "pico/stdio_usb.h"
 #include "pico/stdlib.h"
 #include "pico/unique_id.h"
+#include "pico/usb_reset_config.h"
+#include "tusb.h"
 
 #include "../core/hal.h"
 #include "../core/shell.h"
@@ -33,6 +38,7 @@
 #include "light.h"
 #include "panel.h"
 #include "store.h"
+#include "update.h"
 
 #define PIN_SDA 4
 #define PIN_SCL 5
@@ -56,6 +62,7 @@ bi_decl(bi_1pin_with_name(PIN_LUX_RANGE, "light sensor range"));
 
 static light_t light;
 static uint8_t button;
+static volatile uint8_t reflash;  /* the page touched the port at 1200 baud: a new firmware comes next */
 
 /* ---- flash ------------------------------------------------------------------- */
 
@@ -131,6 +138,25 @@ static void card_identity(void) {
         randid[2 * i + 1] = (uint8_t)(row >> 8);
     }
     shell_card(id.id, randid);
+}
+
+/* ---- reflashing ------------------------------------------------------------- */
+
+/* In place of the SDK's (PICO_ENABLE_USB_RESET_VIA_BAUD_RATE=0), which reboots into BOOTSEL right here in the
+   USB interrupt: the loop does it, once the matrix has the update loop */
+void tud_cdc_line_coding_cb(uint8_t itf, cdc_line_coding_t const *coding) {
+    (void)itf;
+    if (coding->bit_rate == PICO_USB_RESET_MAGIC_BAUD_RATE) reflash = 1;
+}
+
+/* the driver plays the update loop on its own clock while the ROM bootloader takes the new firmware; without
+   a matrix the card just goes */
+static void reflash_now(void) {
+    static uint8_t lum[UPDATE_FRAMES][9][16], pwm[UPDATE_FRAMES][9][16];
+    update_frames(lum);
+    for (int f = 0; f < UPDATE_FRAMES; f++) panel_pwm(lum[f], light_brightness(&light), pwm[f]);
+    is31_autoplay((const uint8_t(*)[9][16])pwm, UPDATE_FRAMES, UPDATE_DELAY);
+    rom_reset_usb_boot_extra(-1, PICO_USB_RESET_BOOTSEL_INTERFACE_DISABLE_MASK, false);
 }
 
 /* ---- devices ----------------------------------------------------------------- */
@@ -221,6 +247,7 @@ int main(void) {
 
     for (;;) {
         watchdog_update();
+        if (reflash) reflash_now();
         uint64_t now = time_us_64();
 
         char buf[64];
@@ -259,7 +286,7 @@ int main(void) {
             light_sample();
             shell_tick();
             face_in in = {(uint32_t)((now - t0) / 1000), button, (uint8_t)linked, (uint8_t)shell_running(),
-                          (uint8_t)typed};
+                          (uint8_t)typed, get_rand_32()};
             typed = 0;
             face_tick(&in);
             face_render(lum);

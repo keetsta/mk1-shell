@@ -74,12 +74,11 @@ static void draw_hold(float img[9][16]) {
 
 float own_draw(float img[9][16]) {
     switch (mode) {
-    case OWN_IDLE: {
-        /* the cursor blinks soft; the running address gets none, any trail smears the letters */
-        int address = prompt_draw(now, linked, img);
+    case OWN_IDLE:
+        /* no afterglow: the caret fades itself, and any trail smears the address's letters */
+        prompt_draw(now, linked, img);
         draw_hold(img);
-        return address ? 0 : 0.5f;
-    }
+        break;
     case DEMO_GAME:
         pong_draw(&game, img);
         return 0.6f;

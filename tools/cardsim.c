@@ -3,6 +3,8 @@
  * their PWM.
  *   build/cardsim | ffmpeg -f rawvideo -pix_fmt rgb24 -s 408x240 -r 25 -i - preview.mp4
  * What the screen shows goes to stderr with the times, whenever it changes.
+ *   build/cardsim update   instead plays what the matrix loops while the card takes a new firmware (update.h)
+ *   build/cardsim savers   instead plays each saver the card picks from when left alone (saver.h)
  */
 #include "cardsim.h"
 
@@ -15,6 +17,8 @@
 #endif
 
 #include "../src/card/panel.h"
+#include "../src/card/saver.h"
+#include "../src/card/update.h"
 #include "../src/core/hal.h"
 #include "../src/core/shell.h"
 
@@ -45,11 +49,10 @@ static void put(int x, int y, const unsigned char c[3])
 }
 
 /* white mask, each 0603 LED a 1.6 x 0.8 mm body: pale when dark, flat red-orange when lit */
-static void emit(void)
+static void emit(uint8_t lum[9][16])
 {
     static const unsigned char mask[3] = {244, 244, 241}, body[3] = {228, 226, 220}, led[3] = {255, 74, 18};
-    uint8_t lum[9][16], pwm[9][16];
-    face_render(lum);
+    uint8_t pwm[9][16];
     panel_pwm(lum, 1.0f, pwm);
     for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++)
@@ -82,7 +85,9 @@ void sim_run(uint32_t ms, int show)
             fprintf(stderr, "video %6.2f s  card %7.2f s  %s\n", video_frames / 25.0, sim.ms / 1000.0, shows);
         }
         if (show && frame_no++ % 2 == 0) {
-            emit();
+            uint8_t lum[9][16];
+            face_render(lum);
+            emit(lum);
             video_frames++;
         }
     }
@@ -95,11 +100,58 @@ void sim_type(const char *s)
     sim.typed = 1;
 }
 
-int main(void)
+/* the loop the matrix plays while the card is reflashed, for 6 s */
+static void updates(void)
+{
+    static uint8_t frames[UPDATE_FRAMES][9][16];
+    uint8_t lum[9][16];
+    update_frames(frames);
+    for (uint32_t ms = 0; ms < 6000; ms += 40) {
+        update_at(frames, ms, lum);
+        emit(lum);
+    }
+}
+
+/* every saver the card picks from when left alone, 16 s each from its start, a dark second
+   between; the card draws them every 20 ms tick and the video takes every other */
+static void savers(void)
+{
+    static const char *const NAMES[SAVER_N] = {"cube", "pendulums", "scope", "lava", "life"};
+    float img[9][16];
+    uint8_t lum[9][16];
+    for (int k = 0; k < SAVER_N; k++) {
+        fprintf(stderr, "video %6.2f s  %s\n", video_frames / 25.0, NAMES[k]);
+        saver_start(k, 12345);
+        for (uint32_t ms = 0; ms < 16000; ms += 20) {
+            memset(img, 0, sizeof img);
+            saver_draw(k, ms, img);
+            if (ms % 40)
+                continue;
+            for (int y = 0; y < 9; y++)
+                for (int x = 0; x < 16; x++)
+                    lum[y][x] = (uint8_t)(img[y][x] >= 1 ? 255 : img[y][x] * 255.0f + 0.5f);
+            emit(lum);
+            video_frames++;
+        }
+        memset(lum, 0, sizeof lum);
+        for (int i = 0; i < 25; i++, video_frames++)
+            emit(lum);
+    }
+}
+
+int main(int argc, char **argv)
 {
 #ifdef _WIN32
     _setmode(_fileno(stdout), _O_BINARY);
 #endif
+    if (argc > 1 && !strcmp(argv[1], "update")) {
+        updates();
+        return 0;
+    }
+    if (argc > 1 && !strcmp(argv[1], "savers")) {
+        savers();
+        return 0;
+    }
     face_init(0);
     shell_init();
     visit();

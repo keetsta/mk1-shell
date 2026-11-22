@@ -1,13 +1,12 @@
 /* The card's screen. While a terminal is open the shell owns it; otherwise the card shows its own screens
- * (own.h), each firmware its own set. Here: who has the screen, the boot, two dots meeting when a terminal
- * opens the port, and the afterglow.
+ * (own.h), each firmware its own set. Here: who has the screen, the transitions, and the afterglow.
  * No hardware here, so the host tests and previews run the same code. */
 #ifndef MK1_FACE_H
 #define MK1_FACE_H
 
 #include <stdint.h>
 
-enum { FACE_BOOT, FACE_OWN, FACE_LINK, FACE_SHELL };
+enum { FACE_BOOT, FACE_OWN, FACE_LINK, FACE_SHELL, FACE_RETURN };
 
 typedef struct {
     uint32_t ms;       /* since power-up */
@@ -15,6 +14,7 @@ typedef struct {
     uint8_t linked;    /* a terminal holds the port (DTR) */
     uint8_t running;   /* the shell runs a program */
     uint8_t typed;     /* the terminal sent something since the last tick */
+    uint32_t rnd;      /* random bits from the platform, fresh every tick: the savers' dice */
 } face_in;
 
 void face_init(uint32_t ms);

@@ -5,7 +5,7 @@ CORE = src/core/vm.c src/core/sha256.c src/core/tasks.c src/core/token.c src/cor
 HDRS = $(wildcard src/core/*.h)
 # the card's screen, light, panel and flash store: no hardware, so they build here too. The card's own screens
 # are src/card/own.c; the demo firmware has demo/own.c in their place
-CARD = src/card/face.c src/card/prompt.c src/card/cube.c src/card/light.c src/card/panel.c src/card/store.c
+CARD = src/card/face.c src/card/prompt.c src/card/cube.c src/card/saver.c src/card/update.c src/card/light.c src/card/panel.c src/card/store.c
 CARD_HDRS = $(wildcard src/card/*.h)
 DEMO = demo/own.c demo/pong.c
 DEMO_HDRS = $(wildcard demo/*.h)
@@ -47,6 +47,14 @@ test: build/test build/test-card build/test-demo
 preview: build/cardsim
 	build/cardsim | ffmpeg -v error -y -f rawvideo -pix_fmt rgb24 -s 408x240 -r 25 -i - -pix_fmt yuv420p build/card-preview.mp4
 
+# what the matrix loops while the card takes a new firmware from the page
+preview-update: build/cardsim
+	build/cardsim update | ffmpeg -v error -y -f rawvideo -pix_fmt rgb24 -s 408x240 -r 25 -i - -pix_fmt yuv420p build/update-preview.mp4
+
+# every saver the card picks from when left alone
+preview-savers: build/cardsim
+	build/cardsim savers | ffmpeg -v error -y -f rawvideo -pix_fmt rgb24 -s 408x240 -r 25 -i - -pix_fmt yuv420p build/saver-preview.mp4
+
 # the demo's, with pong and a hold to the cube
 preview-demo: build/cardsim-demo
 	build/cardsim-demo | ffmpeg -v error -y -f rawvideo -pix_fmt rgb24 -s 408x240 -r 25 -i - -pix_fmt yuv420p build/demo-preview.mp4
@@ -70,4 +78,4 @@ build:
 clean:
 	rm -rf build
 
-.PHONY: all content test preview preview-demo card demo run clean
+.PHONY: all content test preview preview-demo preview-update preview-savers card demo run clean

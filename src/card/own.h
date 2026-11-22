@@ -15,6 +15,7 @@ typedef struct {
     uint8_t pressed;   /* went down this tick; a press that came with the screen is not passed on */
     uint8_t released;  /* came up this tick */
     uint8_t linked;    /* a terminal is there and gave the screen back with ^D */
+    uint32_t rnd;      /* random bits from the platform */
 } own_in;
 
 /* the card has the screen again: boot is over, ^D, or the terminal went away */

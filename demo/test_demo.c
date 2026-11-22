@@ -129,14 +129,14 @@ static void test_face(void)
     CHECK(face_mode() == FACE_SHELL);
     /* ^D gives the screen back until someone types */
     face_exit();
-    run(20);
+    run(280);
     CHECK(own(OWN_IDLE));
     in.typed = 1;
     run(20);
     CHECK(face_mode() == FACE_SHELL);
     /* the terminal closes: back to idle */
     in.linked = 0;
-    run(20);
+    run(280);
     CHECK(own(OWN_IDLE));
     /* but a running program keeps the screen until it stops */
     in.linked = 1;
@@ -147,7 +147,7 @@ static void test_face(void)
     run(2000);
     CHECK(face_mode() == FACE_SHELL);
     in.running = 0;
-    run(20);
+    run(280);
     CHECK(own(OWN_IDLE));
     /* left alone: the cube after 5 minutes, sleep after an hour */
     run(5 * 60 * 1000 + 100);

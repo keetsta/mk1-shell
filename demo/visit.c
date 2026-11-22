@@ -8,7 +8,7 @@
 
 const char *visit_screen(void)
 {
-    static const char *const FACE[] = {"boot", "own", "link", "shell"};
+    static const char *const FACE[] = {"boot", "own", "link", "shell", "return"};
     static const char *const OWN[] = {"idle", "saver", "sleep"};
     static char game[16];
     if (face_mode() != FACE_OWN)

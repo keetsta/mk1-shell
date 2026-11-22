@@ -7,7 +7,7 @@
 
 /* the firmware's version: the page shows it next to the latest release, whose tag is v<this>.
    Bump it with every release */
-#define MK1_VERSION "0.1.0"
+#define MK1_VERSION "0.1.1"
 
 #include <stdint.h>
 

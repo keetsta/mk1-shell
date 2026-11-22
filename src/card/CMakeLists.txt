@@ -12,6 +12,7 @@ pico_sdk_init()
 
 set(CORE ${CMAKE_CURRENT_LIST_DIR}/../core)
 set(DEMO ${CMAKE_CURRENT_LIST_DIR}/../../demo)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CORE}/shell.h")
 file(STRINGS ${CORE}/shell.h MK1_VERSION_LINE REGEX "#define MK1_VERSION ")
 string(REGEX MATCH "\"([^\"]+)\"" _ ${MK1_VERSION_LINE})
 set(MK1_VERSION ${CMAKE_MATCH_1})
@@ -19,7 +20,7 @@ set(MK1_VERSION ${CMAKE_MATCH_1})
 # the card's firmware and the demo's differ only in the card's own screens (own.h), passed after the name
 function(mk1_firmware name product description)
     add_executable(${name}
-        main.c face.c prompt.c cube.c light.c panel.c store.c is31fl3731.c ${ARGN}
+        main.c face.c prompt.c cube.c saver.c update.c light.c panel.c store.c is31fl3731.c ${ARGN}
         ${CORE}/vm.c ${CORE}/sha256.c ${CORE}/tasks.c ${CORE}/token.c ${CORE}/font.c ${CORE}/shell.c ${CORE}/content_gen.c)
     target_compile_options(${name} PRIVATE -Wall -Wextra)
     target_compile_definitions(${name} PRIVATE
@@ -32,8 +33,10 @@ function(mk1_firmware name product description)
         PICO_FLASH_ASSUME_CORE1_SAFE=1
         # all of SCRATCH_Y instead of half: the USB interrupt nests on this stack too
         PICO_STACK_SIZE=0x1000
+        # the 1200 baud reboot into BOOTSEL is main.c's: it gives the matrix the update loop first
+        PICO_ENABLE_USB_RESET_VIA_BAUD_RATE=0
     )
-    target_link_libraries(${name} pico_stdlib pico_flash pico_unique_id hardware_adc hardware_flash hardware_i2c hardware_watchdog)
+    target_link_libraries(${name} pico_stdlib pico_flash pico_rand pico_unique_id hardware_adc hardware_flash hardware_i2c hardware_watchdog)
     pico_enable_stdio_usb(${name} 1)
     pico_enable_stdio_uart(${name} 0)
     pico_set_program_name(${name} "${name}")

@@ -379,11 +379,15 @@ static void test_board(const char *dir)
     CHECK(said("only a real mk-1 card can go on the board"));
     shell_card(test_chipid, test_randid);
     type("top\r");
-    CHECK(said("the board opens once every task is solved: 0 of"));
+    CHECK(said("solve a task to get on the board"));
     /* the best program is kept: a shorter one replaces it, a longer one does not */
     enter_prog(lamp_nop);
     type("check\r");
     CHECK(said("task 1 passed: 12 instructions"));
+    type("top\r");
+    CHECK(!top_token(bin, &tk) && !token_check(&tk, key) && kept(&tk, 1, 12));
+    int len;
+    CHECK(!token_find(tk.sols, tk.sols_len, 2, &len));
     type("task 1\r");
     enter_prog(LAMP);
     type("check\r");
@@ -402,7 +406,8 @@ static void test_board(const char *dir)
     type("top\r");
     CHECK(!top_token(bin, &tk) && !memcmp(tk.chipid, test_chipid, 8) && !token_check(&tk, key));
     CHECK(vm_assemble(&vm, sol2, err, sizeof err) == 0);
-    CHECK(kept(&tk, 1, 11) && kept(&tk, 2, vm.n));
+    int level_instructions = vm.n;
+    CHECK(kept(&tk, 1, 11) && kept(&tk, 2, level_instructions));
 
     /* a card that played on the firmware before the board: its chapters stay, its programs are asked for */
     struct {
@@ -433,11 +438,12 @@ static void test_board(const char *dir)
     type("list\r");
     CHECK(said(" 1| nop"));
     type("top\r");
-    CHECK(said("1 of 2 so far"));
+    CHECK(said("check task 1 again: the board needs its program"));
     enter_prog(sol2);
     type("check\r");
     type("top\r");
-    CHECK(said("check task 1 again: the board needs its program"));
+    CHECK(!top_token(bin, &tk) && !token_check(&tk, key) && kept(&tk, 2, level_instructions));
+    CHECK(!token_find(tk.sols, tk.sols_len, 1, &len));
     type("task 1\r");
     enter_prog(LAMP);
     type("check\r");

@@ -360,22 +360,20 @@ static void keep_best(int t, uint32_t cycles)
 static void cmd_top(void)
 {
     static char text[TOKEN_TEXT_MAX];
-    int solved = 0, total = 0, len;
     if (!card) {
         out("only a real mk-1 card can go on the board\n");
         return;
     }
-    for (int t = 1; t <= N_TASKS && t <= CONTENT_N_TASKS; t++, total++)
-        solved += st.solved >> t & 1;
-    if (solved < total) {
-        outf("the board opens once every task is solved: %d of %d so far\n", solved, total);
+    if (!st.sols_len) {
+        for (int t = 1; t <= N_TASKS && t <= CONTENT_N_TASKS; t++) {
+            if (st.solved >> t & 1) {
+                outf("check task %d again: the board needs its program, and the old firmware kept none\n", t);
+                return;
+            }
+        }
+        out("solve a task to get on the board\n");
         return;
     }
-    for (int t = 1; t <= total; t++)
-        if (!token_find(st.sols, st.sols_len, t, &len)) {
-            outf("check task %d again: the board needs its program, and the old firmware kept none\n", t);
-            return;
-        }
     token_make(card_id, card_key, st.sols, st.sols_len, text);
     out("this card on the board:\nhttps://keetsta.me/mk1/top#");
     out(text);

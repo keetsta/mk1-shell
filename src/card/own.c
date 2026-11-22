@@ -1,21 +1,23 @@
-/* The card's own screens: the prompt with the address, the cube when left alone for 5 minutes, and sleep after
- * an hour. The button acts only as it goes down: on the prompt it runs the address at once, on the cube and
- * asleep it wakes the card. Games and screens switched by holding the button are the demo's (demo/). */
+/* The card's own screens: the prompt with the address, the savers when left alone for 5 minutes (saver.h),
+ * and sleep after an hour. The button acts only as it goes down: on the prompt it runs the address at once,
+ * on a saver and asleep it wakes the card. Games and screens switched by holding the button are the demo's
+ * (demo/). */
 #include "own.h"
 
-#include "cube.h"
 #include "prompt.h"
+#include "saver.h"
 
 #define SAVER_MS (5u * 60u * 1000u)
 #define SLEEP_MS (60u * 60u * 1000u)
 
 static int mode, linked;
-static uint32_t now, since;
+static uint32_t now, since, rnd;
 
 static void go(int m) {
     mode = m;
     since = now;
     if (m == OWN_IDLE) prompt_start(now);
+    if (m == OWN_SAVER) saver_begin(now, rnd);
 }
 
 void own_enter(uint32_t ms) {
@@ -28,6 +30,7 @@ int own_mode(void) { return mode; }
 void own_tick(const own_in *in) {
     now = in->ms;
     linked = in->linked;
+    rnd = in->rnd;
     switch (mode) {
     case OWN_IDLE:
         if (in->pressed)
@@ -47,13 +50,14 @@ void own_tick(const own_in *in) {
     }
 }
 
+/* no afterglow anywhere: the caret fades itself, the address's letters and the savers' motion would smear */
 float own_draw(float img[9][16]) {
     switch (mode) {
     case OWN_IDLE:
-        /* the cursor blinks soft; the running address gets none, any trail smears the letters */
-        return prompt_draw(now, linked, img) ? 0 : 0.5f;
+        prompt_draw(now, linked, img);
+        break;
     case OWN_SAVER:
-        cube_draw(now - since, img);
+        saver_frame(now, img);
         break;
     case OWN_SLEEP:
         prompt_sleep((float)(now - since) / 1000.0f, img);

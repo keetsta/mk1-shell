@@ -9,8 +9,11 @@
 #define BANK_FUNC 0x0B
 #define FUNC_CONFIG 0x00
 #define FUNC_PICTURE 0x01
+#define FUNC_AUTOPLAY1 0x02
+#define FUNC_AUTOPLAY2 0x03
 #define FUNC_AUDIOSYNC 0x06
 #define FUNC_SHUTDOWN 0x0A
+#define MODE_AUTOPLAY 0x08 /* configuration: auto frame play from frame 1 */
 #define FRAME_ENABLE 0x00 /* 18 bytes, one bit per LED */
 #define FRAME_BLINK 0x12  /* 18 bytes */
 #define FRAME_PWM 0x24    /* 144 bytes */
@@ -47,6 +50,19 @@ int is31_init(i2c_inst_t *i2c) {
     if (bank(BANK_FUNC) || reg(FUNC_CONFIG, 0) || reg(FUNC_PICTURE, 0) || reg(FUNC_AUDIOSYNC, 0))
         return -1;
     return reg(FUNC_SHUTDOWN, 1);
+}
+
+int is31_autoplay(const uint8_t pwm[][9][16], int n, uint8_t delay) {
+    uint8_t b[1 + 144];
+    b[0] = FRAME_PWM;
+    for (int f = 0; f < n; f++) {
+        memcpy(b + 1, pwm[f], 144);
+        if (bank((uint8_t)f) || fill(FRAME_ENABLE, 0xFF, 18) || fill(FRAME_BLINK, 0, 18) || put(b, sizeof b))
+            return -1;
+    }
+    /* frame count 0 plays all eight, loop count 0 for ever */
+    if (bank(BANK_FUNC) || reg(FUNC_AUTOPLAY1, (uint8_t)(n & 7)) || reg(FUNC_AUTOPLAY2, delay)) return -1;
+    return reg(FUNC_CONFIG, MODE_AUTOPLAY);
 }
 
 int is31_show(const uint8_t pwm[9][16]) {
