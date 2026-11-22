@@ -75,4 +75,4 @@ endfunction()
 
 mk1_firmware(mk1 "mk-1" "keetsta mk-1: a shell over usb-c" own.c)
 # the page finds the card by the vendor id alone, so the demo can tell itself apart in the product name
-mk1_firmware(mk1-demo "mk-1 demo" "keetsta mk-1 demo: pong and the cube on the button" ${DEMO}/own.c ${DEMO}/pong.c)
+mk1_firmware(mk1-demo "mk-1 demo" "keetsta mk-1 demo: matrix savers and pong" ${DEMO}/own.c ${DEMO}/pong.c)

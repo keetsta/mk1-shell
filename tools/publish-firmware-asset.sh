@@ -8,9 +8,18 @@ if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
     exit 1
 fi
 
+name=${image##*/}
+case "$name" in
+    mk1.uf2|mk1-demo.uf2) ;;
+    *)
+        echo 'expected mk1.uf2 or mk1-demo.uf2' >&2
+        exit 1
+        ;;
+esac
+
 ref=refs/heads/firmware-assets
 digest=$(sha256sum -- "$image")
-asset="uf2/$tag/${digest%% *}/mk1.uf2"
+asset="uf2/$tag/${digest%% *}/$name"
 blob=$(git hash-object -w --no-filters -- "$image")
 scratch=$(mktemp -d)
 trap 'rm -rf -- "$scratch"' EXIT

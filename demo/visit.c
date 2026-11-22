@@ -1,5 +1,3 @@
-/* The demo's visit for `make preview-demo`: boot, the prompt, a game of pong, a hold to the cube, a terminal
- * opening the port, sudo and its dragons, ^D, sleep. */
 #include "../tools/cardsim.h"
 
 #include <stdio.h>
@@ -10,9 +8,12 @@ const char *visit_screen(void)
 {
     static const char *const FACE[] = {"boot", "own", "link", "shell", "return"};
     static const char *const OWN[] = {"idle", "saver", "sleep"};
+    static const char *const SAVERS[SAVER_N] = {"cube", "pendulums", "scope", "lava", "life"};
     static char game[16];
     if (face_mode() != FACE_OWN)
         return FACE[face_mode()];
+    if (own_mode() == OWN_SAVER)
+        return SAVERS[demo_saver_kind()];
     if (own_mode() != DEMO_GAME)
         return OWN[own_mode()];
     snprintf(game, sizeof game, "game %d:%d", demo_game()->score[0], demo_game()->score[1]);
@@ -34,21 +35,25 @@ static void play(uint32_t ms)
     sim.button = 0;
 }
 
+static void press(uint32_t ms)
+{
+    sim.button = 1;
+    sim_run(ms, 1);
+    sim.button = 0;
+    sim_run(40, 1);
+}
+
 void visit(void)
 {
     sim_run(14000, 1);              /* boot, the prompt, the address running by */
-    sim.button = 1;                 /* a press: pong */
-    sim_run(60, 1);
-    sim.button = 0;
-    play(24000);                    /* then a hold on the score: the bar fills, back to idle */
+    for (int i = 0; i < SAVER_N; i++) {
+        press(60);
+        sim_run(6000, 1);
+    }
+    press(60);
     sim_run(1500, 1);
-    sim.button = 1;                 /* a 2 s hold in idle: the bar fills, the cube */
-    sim_run(2200, 1);
-    sim.button = 0;
-    sim_run(8000, 1);
-    sim.button = 1;                 /* a press: idle again */
-    sim_run(60, 1);
-    sim.button = 0;
+    press(2200);
+    play(24000);
     sim_run(1500, 1);
     sim.linked = 1;                 /* a terminal opens the port */
     sim_run(1500, 1);

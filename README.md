@@ -79,7 +79,7 @@ When the connected card already runs 0.1.2 or later, the installer matches its c
 | Release asset | What runs on the card |
 | --- | --- |
 | `mk1.uf2` | USB shell, standby screen, and matrix screensavers |
-| `mk1-demo.uf2` | The same shell with Pong on a button press and a spinning cube on a long press |
+| `mk1-demo.uf2` | The same shell with five screensavers on short presses. Hold the button for two seconds and release to play Pong. |
 
 <details>
 <summary>Install from the RP2350 drive</summary>

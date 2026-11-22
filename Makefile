@@ -55,7 +55,7 @@ preview-update: build/cardsim
 preview-savers: build/cardsim
 	build/cardsim savers | ffmpeg -v error -y -f rawvideo -pix_fmt rgb24 -s 408x240 -r 25 -i - -pix_fmt yuv420p build/saver-preview.mp4
 
-# the demo's, with pong and a hold to the cube
+# the demo's, with the saver gallery and pong
 preview-demo: build/cardsim-demo
 	build/cardsim-demo | ffmpeg -v error -y -f rawvideo -pix_fmt rgb24 -s 408x240 -r 25 -i - -pix_fmt yuv420p build/demo-preview.mp4
 

@@ -96,22 +96,93 @@ static int lit(void)
 
 static int own(int m) { return face_mode() == FACE_OWN && own_mode() == m; }
 
+static void reset_face(void)
+{
+    memset(&in, 0, sizeof in);
+    face_init(0);
+    run(800);
+}
+
+static void test_gallery(void)
+{
+    reset_face();
+    CHECK(own(OWN_IDLE) && lit() > 0);
+    uint8_t frames[SAVER_N][9][16], lum[9][16];
+    for (int i = 0; i < SAVER_N; i++) {
+        in.button = 1;
+        run(60);
+        CHECK(i == 0 ? own(OWN_IDLE) : own(OWN_SAVER) && demo_saver_kind() == i - 1);
+        in.button = 0;
+        run(300);
+        CHECK(own(OWN_SAVER) && demo_saver_kind() == i && lit() > 0);
+        face_render(frames[i]);
+        for (int j = 0; j < i; j++)
+            CHECK(memcmp(frames[i], frames[j], sizeof lum) != 0);
+        run(320);
+        face_render(lum);
+        CHECK(memcmp(frames[i], lum, sizeof lum) != 0);
+    }
+    press(60);
+    CHECK(own(OWN_IDLE));
+    press(1500);
+    CHECK(own(OWN_SAVER) && demo_saver_kind() == SAVER_CUBE);
+    run(30 * 1000);
+    CHECK(own(OWN_SAVER) && demo_saver_kind() == SAVER_CUBE);
+
+    reset_face();
+    run(5 * 60 * 1000 + 100);
+    CHECK(own(OWN_SAVER) && demo_saver_kind() == SAVER_CUBE);
+    for (int i = 1; i <= SAVER_N; i++) {
+        run(15 * 1000);
+        CHECK(own(OWN_SAVER) && demo_saver_kind() == i % SAVER_N);
+    }
+    press(60);
+    run(15 * 1000);
+    CHECK(own(OWN_SAVER) && demo_saver_kind() == SAVER_PENDULUMS);
+    run(60 * 60 * 1000 + 100);
+    CHECK(own(OWN_SLEEP));
+    press(2500);
+    CHECK(own(OWN_IDLE));
+    press(60);
+    CHECK(own(OWN_SAVER) && demo_saver_kind() == SAVER_CUBE);
+}
+
+static void test_pong_button(void)
+{
+    reset_face();
+    uint8_t lum[9][16];
+    in.button = 1;
+    run(1500);
+    face_render(lum);
+    CHECK(own(OWN_IDLE) && lum[8][0] > 0 && lum[8][9] > 0 && lum[8][15] == 0);
+    run(600);
+    face_render(lum);
+    CHECK(own(OWN_IDLE) && lum[8][15] > 0);
+    in.button = 0;
+    run(20);
+    CHECK(own(DEMO_GAME) && demo_game()->phase == PONG_SERVE && demo_game()->you == 4.0f);
+    press(2100);
+    CHECK(own(DEMO_GAME));
+    for (int t = 0; t < 50 * 60 && demo_game()->phase != PONG_POINT; t++)
+        run(20);
+    CHECK(demo_game()->phase == PONG_POINT);
+    press(2100);
+    CHECK(own(OWN_IDLE));
+    press(60);
+    CHECK(own(OWN_SAVER) && demo_saver_kind() == SAVER_CUBE);
+    press(2100);
+    CHECK(own(DEMO_GAME));
+    run(46 * 1000);
+    CHECK(own(OWN_IDLE));
+}
+
 static void test_face(void)
 {
     memset(&in, 0, sizeof in);
     face_init(0);
     CHECK(face_mode() == FACE_BOOT);
-    run(800);
+    press(2500);
     CHECK(own(OWN_IDLE) && lit() > 0);
-    /* a press starts pong; in a rally holding only moves the paddle, between rallies 2 s leave */
-    press(60);
-    CHECK(own(DEMO_GAME));
-    press(2100);
-    CHECK(own(DEMO_GAME));
-    for (int t = 0; t < 50 * 60 && demo_game()->phase != PONG_POINT; t++)
-        run(20);
-    press(2100);
-    CHECK(own(OWN_IDLE));
     /* a terminal opens the port: the connect animation, then the shell's own pixels, exactly */
     in.linked = 1;
     run(100);
@@ -149,21 +220,6 @@ static void test_face(void)
     in.running = 0;
     run(280);
     CHECK(own(OWN_IDLE));
-    /* left alone: the cube after 5 minutes, sleep after an hour */
-    run(5 * 60 * 1000 + 100);
-    CHECK(own(OWN_SAVER) && lit() > 10);
-    /* a press there only wakes the card, it does not start a game */
-    press(60);
-    CHECK(own(OWN_IDLE));
-    run(60 * 60 * 1000 + 100);
-    CHECK(own(OWN_SLEEP));
-    press(60);
-    CHECK(own(OWN_IDLE));
-    /* an abandoned game goes back to idle */
-    press(60);
-    CHECK(own(DEMO_GAME));
-    run(46 * 1000);
-    CHECK(own(OWN_IDLE));
     /* the address runs by every few seconds in idle: the screen is not the prompt for a while */
     int frames = 0, differ = 0;
     uint8_t first[9][16];
@@ -175,29 +231,13 @@ static void test_face(void)
         differ += memcmp(first, lum, sizeof lum) != 0;
     }
     CHECK(differ > 200);
-    /* holding 2 s in idle moves on to the cube, the bottom row filling on the way, and letting go after
-       that starts no game */
-    CHECK(own(OWN_IDLE));
-    in.button = 1;
-    run(1500);
-    face_render(lum);
-    CHECK(own(OWN_IDLE) && lum[8][0] > 0 && lum[8][9] > 0 && lum[8][15] == 0);
-    run(600);
-    CHECK(own(OWN_SAVER));
-    in.button = 0;
-    run(100);
-    CHECK(own(OWN_SAVER));
-    /* a press there brings idle back, and that press starts no game either */
-    press(60);
-    CHECK(own(OWN_IDLE));
-    /* a slow tap is still a tap */
-    press(1500);
-    CHECK(own(DEMO_GAME));
 }
 
 int main(void)
 {
     test_pong();
+    test_gallery();
+    test_pong_button();
     test_face();
     printf("%d checks, %d failed\n", checks, fails);
     return fails != 0;

@@ -54,6 +54,7 @@ jobs:
         run: |
           gh auth setup-git --hostname github.com
           bash tools/publish-firmware-asset.sh "$GITHUB_REF_NAME" build/card/mk1.uf2
+          bash tools/publish-firmware-asset.sh "$GITHUB_REF_NAME" build/card/mk1-demo.uf2
           if ! gh release view "$GITHUB_REF_NAME" --json tagName >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
               --notes-file "$RUNNER_TEMP/mk1-release-notes.md" \
