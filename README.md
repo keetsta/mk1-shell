@@ -100,6 +100,8 @@ See how to [run the service and register cards](server/README.md).
 
 ## Develop and release
 
+The [CI workflow](.github/workflows/ci.yml) runs the native and leaderboard API tests, builds both UF2 images, and attaches them to the run.
+
 Run `make test` to check the shell core, card UI, and demo. The standard build uses the committed `src/core/content_gen.c`. To test reference solutions, clone the private `mk1-content` repository into `content/`. Run `make content` after editing that content.
 
 <details>

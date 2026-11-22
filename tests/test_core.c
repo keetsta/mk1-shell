@@ -418,17 +418,19 @@ static void test_board(const char *dir)
     type("check\r");
     CHECK(said("task 1 passed: 12 instructions"));
     snprintf(path, sizeof path, "%s/sol2.asm", dir);
-    if (!(sol2 = slurp(path)))
-        return;
-    type("task 2\r");
-    enter_prog(sol2);
-    type("check\r");
-    CHECK(said("task 2 passed"));
-    type("top\r");
-    CHECK(!top_token(bin, &tk) && !memcmp(tk.chipid, test_chipid, 8) && !token_check(&tk, key));
-    CHECK(vm_assemble(&vm, sol2, err, sizeof err) == 0);
-    int level_instructions = vm.n;
-    CHECK(kept(&tk, 1, 11) && kept(&tk, 2, level_instructions));
+    sol2 = slurp(path);
+    int level_instructions = 0;
+    if (sol2) {
+        type("task 2\r");
+        enter_prog(sol2);
+        type("check\r");
+        CHECK(said("task 2 passed"));
+        type("top\r");
+        CHECK(!top_token(bin, &tk) && !memcmp(tk.chipid, test_chipid, 8) && !token_check(&tk, key));
+        CHECK(vm_assemble(&vm, sol2, err, sizeof err) == 0);
+        level_instructions = vm.n;
+        CHECK(kept(&tk, 1, 11) && kept(&tk, 2, level_instructions));
+    }
 
     /* a card that played on the firmware before the board: its chapters stay, its programs are asked for */
     struct {
@@ -460,11 +462,13 @@ static void test_board(const char *dir)
     CHECK(said(" 1| nop"));
     type("top\r");
     CHECK(said("check task 1 again: the board needs its program"));
-    enter_prog(sol2);
-    type("check\r");
-    type("top\r");
-    CHECK(!top_token(bin, &tk) && !token_check(&tk, key) && kept(&tk, 2, level_instructions));
-    CHECK(!token_find(tk.sols, tk.sols_len, 1, &len));
+    if (sol2) {
+        enter_prog(sol2);
+        type("check\r");
+        type("top\r");
+        CHECK(!top_token(bin, &tk) && !token_check(&tk, key) && kept(&tk, 2, level_instructions));
+        CHECK(!token_find(tk.sols, tk.sols_len, 1, &len));
+    }
     type("task 1\r");
     enter_prog(LAMP);
     type("check\r");

@@ -1,0 +1,77 @@
+name: Test and build mk-1
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mk1-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Native and leaderboard tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build and test the native shell
+        run: |
+          make all
+          make test
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Install Zig 0.16.0
+        run: |
+          venv="$RUNNER_TEMP/mk1-zig"
+          python3 -m venv "$venv"
+          "$venv/bin/python" -m pip --isolated install --disable-pip-version-check \
+            --index-url https://pypi.org/simple --only-binary=:all: --no-deps --require-hashes -r /dev/stdin <<'REQUIREMENTS'
+          ziglang==0.16.0 --hash=sha256:9fcda73f62b851dd72a54b710ad40a209896db14cfb13649e62191243556342b
+          REQUIREMENTS
+          zig_bin=$("$venv/bin/python" -c 'from pathlib import Path; import ziglang; print(Path(ziglang.__file__).parent / "zig")')
+          test "$("$zig_bin" version)" = '0.16.0'
+          printf 'ZIG=%s\n' "$zig_bin" >> "$GITHUB_ENV"
+
+      - name: Build the scorer and test the leaderboard API
+        run: |
+          node server/build-score.mjs
+          node --test server/*.test.mjs
+
+  firmware:
+    name: RP2350 firmware build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-firmware
+
+      - name: Build both UF2 images
+        run: |
+          make card demo
+          "$PICOTOOL_DIR/picotool" info build/card/mk1.uf2
+          "$PICOTOOL_DIR/picotool" info build/card/mk1-demo.uf2
+
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: mk1-ci-firmware
+          path: |
+            build/card/mk1.uf2
+            build/card/mk1-demo.uf2
+          if-no-files-found: error
+          retention-days: 7

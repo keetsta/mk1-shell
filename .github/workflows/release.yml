@@ -24,7 +24,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -39,31 +39,7 @@ jobs:
             exit 1
           fi
           bash tools/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/mk1-release-notes.md"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          repository: raspberrypi/pico-sdk
-          ref: 079c6f39023649b154152db30f1d781e884879bc # 2.3.1
-          path: .release/pico-sdk
-          persist-credentials: false
-      - name: Install firmware toolchain
-        run: |
-          git -C .release/pico-sdk submodule update --init lib/tinyusb
-          tools="$RUNNER_TEMP/mk1-tools"
-          mkdir -p "$tools"
-          cd "$tools"
-          curl --fail --silent --show-error --location --retry 3 --max-time 180 \
-            -o arm-gnu.tar.xz 'https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi.tar.xz'
-          curl --fail --silent --show-error --location --retry 3 --max-time 120 \
-            -o picotool.tar.gz 'https://github.com/raspberrypi/pico-sdk-tools/releases/download/v2.3.1-0/picotool-2.3.1-x86_64-lin.tar.gz'
-          sha256sum --check <<'CHECKSUMS'
-          62a63b981fe391a9cbad7ef51b17e49aeaa3e7b0d029b36ca1e9c3b2a9b78823  arm-gnu.tar.xz
-          878a1a1e7d8336b8be60300c7218f366d9790c0d3a211b181d6d172e80b1248e  picotool.tar.gz
-          CHECKSUMS
-          tar -xf arm-gnu.tar.xz
-          tar -xf picotool.tar.gz
-          printf 'PICO_TOOLCHAIN_PATH=%s\n' "$tools/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi" >> "$GITHUB_ENV"
-          printf 'PICO_SDK_PATH=%s\n' "$GITHUB_WORKSPACE/.release/pico-sdk" >> "$GITHUB_ENV"
-          printf 'PICOTOOL_DIR=%s\n' "$tools/picotool" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-firmware
       - name: Test and build firmware
         run: |
           make test
