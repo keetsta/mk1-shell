@@ -85,7 +85,8 @@ export function registerCard({ local = false, target, remoteDirectory, remoteNod
   const remoteExecutable = remoteNode === undefined ? 'node' : quoteRemotePath(remoteNode);
   const args = local
     ? [fileURLToPath(new URL('./admin.mjs', import.meta.url)), 'register']
-    : ['-T', '--', target, remoteExecutable + ' ' + quoteRemotePath(posix.join(remoteDirectory, 'server', 'admin.mjs')) + ' register'];
+    : ['-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '--', target,
+        remoteExecutable + ' ' + quoteRemotePath(posix.join(remoteDirectory, 'server', 'admin.mjs')) + ' register'];
   const registration = run(command, args, {
     input: JSON.stringify(identity),
     stdio: ['pipe', 'ignore', 'ignore'],

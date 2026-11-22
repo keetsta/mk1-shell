@@ -7,7 +7,7 @@
 
 /* the firmware's version: the page shows it next to the latest release, whose tag is v<this>.
    Bump it with every release */
-#define MK1_VERSION "0.1.1"
+#define MK1_VERSION "0.1.2"
 
 #include <stdint.h>
 
@@ -24,7 +24,7 @@ void shell_connect(void);
    is just that matrix hands it back with shell_screen_rows */
 void shell_screen(const uint8_t lum[9][16]);
 void shell_screen_rows(const uint16_t rows[9]);
-/* the terminal went away (DTR dropped on the card): stop sending frames to the web page */
+/* the terminal went away (DTR dropped on the card): stop sending frames and discard partial sequences */
 void shell_disconnect(void);
 /* the card's identity for the board (token.h): the chip id and the factory RANDID from OTP, from which the
    card key is made. Only the card has them; without this call `top` says there is no card to sign with */

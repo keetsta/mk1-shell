@@ -22,10 +22,9 @@ int hal_rows(void);
    carries on as soon as someone types again */
 void hal_exit(void);
 /* persistent state (unlocked chapters, the program); load returns 0 unless a valid state of exactly n bytes
-   is there. HAL_STATE_MAX is the most save is handed: the card keeps the state in one 4 KB flash sector and
-   drops anything bigger without a word */
+   is there. save returns 0 on success or -1 on failure. The state must fit in a 4 KB flash sector. */
 #define HAL_STATE_MAX 4080
 int hal_load(void *buf, size_t n);
-void hal_save(const void *buf, size_t n);
+int hal_save(const void *buf, size_t n);
 
 #endif

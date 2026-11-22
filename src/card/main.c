@@ -51,9 +51,9 @@
 #define BUTTON_US 5000u
 #define BUTTON_SAMPLES 4        /* 20 ms the same before the state flips */
 #define LINK_SETTLE_US 100000u  /* terminals wiggle DTR while they open */
+#define USB_INPUT_CHUNKS 4
 #define MATRIX_RETRY_US 500000u
 #define WATCHDOG_MS 4000u       /* the longest wait is a sector erase, 400 ms at worst */
-#define STORE_SECTORS 8u
 
 bi_decl(bi_2pins_with_func(PIN_SDA, PIN_SCL, GPIO_FUNC_I2C));
 bi_decl(bi_1pin_with_name(PIN_EE_WP, "eeprom write protect"));
@@ -92,11 +92,13 @@ static int fl_program(uint32_t off, const uint8_t *data, uint32_t len) {
 static const uint8_t *fl_read(uint32_t off) { return (const uint8_t *)(XIP_BASE + off); }
 
 static_assert(HAL_STATE_MAX <= STORE_MAX, "a shell state the store can't hold would be dropped on every save");
+static_assert(MK1_E10_OFFSET + STORE_SECTOR == PICO_FLASH_SIZE_BYTES - MK1_STORE_SECTORS * STORE_SECTOR,
+              "the UF2 workaround needs its own sector before the progress ring");
 
 /* the last 32 KB of the 16 MB flash: far past the program, and a new .uf2 never touches it */
 static store_t store = {
-    .base = PICO_FLASH_SIZE_BYTES - STORE_SECTORS * STORE_SECTOR,
-    .sectors = STORE_SECTORS,
+    .base = PICO_FLASH_SIZE_BYTES - MK1_STORE_SECTORS * STORE_SECTOR,
+    .sectors = MK1_STORE_SECTORS,
     .read = fl_read,
     .erase = fl_erase,
     .program = fl_program,
@@ -122,7 +124,7 @@ uint16_t hal_lux(void) { return light_port(&light); }
 int hal_rows(void) { return 0; }
 void hal_exit(void) { face_exit(); }
 int hal_load(void *buf, size_t n) { return store_load(&store, buf, (uint32_t)n); }
-void hal_save(const void *buf, size_t n) { store_save(&store, buf, (uint32_t)n); }
+int hal_save(const void *buf, size_t n) { return store_save(&store, buf, (uint32_t)n); }
 
 /* The card's identity for the board (token.h): the chip id in the order the USB serial number spells it, and
  * RANDID, 128 random bits the factory left in OTP rows 0x004..0x00b. Page 0 of OTP stays readable to any
@@ -250,13 +252,6 @@ int main(void) {
         if (reflash) reflash_now();
         uint64_t now = time_us_64();
 
-        char buf[64];
-        int n;
-        while ((n = stdio_usb.in_chars(buf, sizeof buf)) > 0) {
-            typed = 1;
-            for (int i = 0; i < n; i++) shell_input(buf[i]);
-        }
-
         int raw = stdio_usb_connected();
         if (raw != link_raw) {
             link_raw = raw;
@@ -269,6 +264,15 @@ int main(void) {
             else
                 shell_disconnect();
         }
+
+        char buf[64];
+        for (int chunk = 0; chunk < USB_INPUT_CHUNKS; chunk++) {
+            int n = stdio_usb.in_chars(buf, sizeof buf);
+            if (n <= 0) break;
+            typed = 1;
+            for (int i = 0; i < n; i++) shell_input(buf[i]);
+        }
+        now = time_us_64();
 
         if (now >= next_button) {
             next_button = now - next_button > 4 * BUTTON_US ? now + BUTTON_US : next_button + BUTTON_US;

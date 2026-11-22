@@ -14,8 +14,8 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
-#include <sys/time.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "../core/hal.h"
@@ -62,18 +62,31 @@ int hal_load(void *buf, size_t n)
     if (!f)
         return 0;
     size_t k = fread(buf, 1, n, f);
-    int longer = fgetc(f) != EOF;
+    int ok = k == n && fgetc(f) == EOF && !ferror(f);
     fclose(f);
-    return k == n && !longer;
+    return ok;
 }
 
-void hal_save(const void *buf, size_t n)
+int hal_save(const void *buf, size_t n)
 {
-    FILE *f = fopen(state_path, "wb");
-    if (f) {
-        fwrite(buf, 1, n, f);
-        fclose(f);
+    char temp[sizeof state_path + sizeof ".tmp.XXXXXX"];
+    snprintf(temp, sizeof temp, "%s.tmp.XXXXXX", state_path);
+    int fd = mkstemp(temp);
+    if (fd < 0)
+        return -1;
+    FILE *f = fdopen(fd, "wb");
+    if (!f) {
+        close(fd);
+        unlink(temp);
+        return -1;
     }
+    int ok = fwrite(buf, 1, n, f) == n && !fflush(f) && !fsync(fd);
+    if (fclose(f))
+        ok = 0;
+    if (ok && !rename(temp, state_path))
+        return 0;
+    unlink(temp);
+    return -1;
 }
 
 static int term_lines(void)
@@ -125,18 +138,21 @@ static void restore(void)
 
 static long long now_ms(void)
 {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
 int main(void)
 {
     const char *p = getenv("MK1_STATE");
-    if (p)
-        snprintf(state_path, sizeof state_path, "%s", p);
-    else
-        snprintf(state_path, sizeof state_path, "%s/.mk1-shell", getenv("HOME") ? getenv("HOME") : ".");
+    const char *dir = getenv("HOME");
+    int path_len = p ? snprintf(state_path, sizeof state_path, "%s", p)
+                     : snprintf(state_path, sizeof state_path, "%s/.mk1-shell", dir ? dir : ".");
+    if (path_len < 0 || (size_t)path_len >= sizeof state_path) {
+        fputs("state path is too long\n", stderr);
+        return 1;
+    }
 
     tty = isatty(0) && isatty(1);
     if (tty) {
@@ -195,7 +211,10 @@ int main(void)
                 shell_input(c);
             }
         }
-        while (now_ms() >= next) {
+        long long now = now_ms();
+        if (now - next > 5 * VM_TICK_MS)
+            next = now;
+        while (now >= next) {
             shell_tick();
             next += VM_TICK_MS;
         }

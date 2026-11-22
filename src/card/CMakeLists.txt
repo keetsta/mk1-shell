@@ -12,6 +12,18 @@ pico_sdk_init()
 
 set(CORE ${CMAKE_CURRENT_LIST_DIR}/../core)
 set(DEMO ${CMAKE_CURRENT_LIST_DIR}/../../demo)
+
+if (NOT PICO_FLASH_SIZE_BYTES)
+    set(PICO_FLASH_SIZE_BYTES ${PICO_DEFAULT_FLASH_SIZE_BYTES})
+endif()
+set(MK1_STORE_SECTORS 8)
+math(EXPR MK1_E10_OFFSET "${PICO_FLASH_SIZE_BYTES} - (${MK1_STORE_SECTORS} + 1) * 4096")
+math(EXPR MK1_E10_SECTOR "0x10000000 + ${MK1_E10_OFFSET}" OUTPUT_FORMAT HEXADECIMAL)
+math(EXPR MK1_E10_PAGE "${MK1_E10_SECTOR} + 4096 - 256" OUTPUT_FORMAT HEXADECIMAL)
+set(MK1_FLASH_BOUNDS "${CMAKE_CURRENT_BINARY_DIR}/mk1_flash_bounds.ld")
+file(GENERATE OUTPUT "${MK1_FLASH_BOUNDS}"
+     CONTENT "ASSERT(__flash_binary_end <= ${MK1_E10_SECTOR}, \"firmware overlaps the reserved E10 sector\")\n")
+
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CORE}/shell.h")
 file(STRINGS ${CORE}/shell.h MK1_VERSION_LINE REGEX "#define MK1_VERSION ")
 string(REGEX MATCH "\"([^\"]+)\"" _ ${MK1_VERSION_LINE})
@@ -24,6 +36,8 @@ function(mk1_firmware name product description)
         ${CORE}/vm.c ${CORE}/sha256.c ${CORE}/tasks.c ${CORE}/token.c ${CORE}/font.c ${CORE}/shell.c ${CORE}/content_gen.c)
     target_compile_options(${name} PRIVATE -Wall -Wextra)
     target_compile_definitions(${name} PRIVATE
+        MK1_STORE_SECTORS=${MK1_STORE_SECTORS}
+        MK1_E10_OFFSET=${MK1_E10_OFFSET}
         USBD_MANUFACTURER="keetsta"
         USBD_PRODUCT="${product}"
         # a whole screen of the manual fits in the USB buffer instead of trickling out 64 bytes at a time
@@ -36,6 +50,11 @@ function(mk1_firmware name product description)
         # the 1200 baud reboot into BOOTSEL is main.c's: it gives the matrix the update loop first
         PICO_ENABLE_USB_RESET_VIA_BAUD_RATE=0
     )
+    target_link_options(${name} PRIVATE "LINKER:-T,${MK1_FLASH_BOUNDS}")
+    set_property(TARGET ${name} APPEND PROPERTY LINK_DEPENDS "${MK1_FLASH_BOUNDS}")
+    if (PICO_RP2350_A2_SUPPORTED)
+        set_target_properties(${name} PROPERTIES PICOTOOL_EXTRA_UF2_ARGS "--abs-block;${MK1_E10_PAGE}")
+    endif()
     target_link_libraries(${name} pico_stdlib pico_flash pico_rand pico_unique_id hardware_adc hardware_flash hardware_i2c hardware_watchdog)
     pico_enable_stdio_usb(${name} 1)
     pico_enable_stdio_uart(${name} 0)

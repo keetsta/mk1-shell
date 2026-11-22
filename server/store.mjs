@@ -3,6 +3,10 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+const nicknameChallengeLifetime = 120_000;
+const maxCardChallenges = 8;
+const maxChallenges = 4096;
+
 export function boardDatabasePath() {
   const path = process.env.MK1_BOARD_DB ?? join(homedir(), ".local", "share", "mk1-board", "leaderboard.sqlite");
   if (!isAbsolute(path)) throw new Error("set MK1_BOARD_DB to an absolute database path");
@@ -33,6 +37,15 @@ export function openBoard(path) {
       ticks INTEGER NOT NULL,
       updated_at TEXT NOT NULL
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS result_rank ON results (score DESC, solved DESC, instructions, cycles, ticks, updated_at);
+    CREATE TABLE IF NOT EXISTS nickname_challenges (
+      nonce TEXT PRIMARY KEY,
+      chip_id TEXT NOT NULL REFERENCES cards (chip_id) ON DELETE CASCADE,
+      nickname TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      UNIQUE (chip_id, nickname)
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS nickname_expiry ON nickname_challenges (expires_at);
   `);
   if (!db.prepare("SELECT 1 FROM pragma_table_info('cards') WHERE name = 'nickname'").get()) {
     db.exec("ALTER TABLE cards ADD COLUMN nickname TEXT");
@@ -45,6 +58,7 @@ export function openBoard(path) {
   `);
   const revoke = db.prepare("DELETE FROM cards WHERE chip_id = ?");
   const lookup = db.prepare("SELECT mac_key FROM cards WHERE chip_id = ?");
+  const setInitialNickname = db.prepare("UPDATE cards SET nickname = ? WHERE chip_id = ? AND nickname IS NULL");
   const rename = db.prepare("UPDATE cards SET nickname = ? WHERE chip_id = ?");
   const record = db.prepare(`
     INSERT INTO results (chip_id, programs, score, solved, instructions, cycles, ticks, updated_at)
@@ -67,7 +81,31 @@ export function openBoard(path) {
   const entry = db.prepare(resultFields + "WHERE chip_id = ?");
   const entries = db.prepare(resultFields + `
     ORDER BY score DESC, solved DESC, instructions, cycles, ticks, updated_at, public_id
+    LIMIT ? OFFSET ?
   `);
+  const pruneChallenges = db.prepare("DELETE FROM nickname_challenges WHERE expires_at <= ?");
+  const clearChallenges = db.prepare("DELETE FROM nickname_challenges WHERE chip_id = ?");
+  const countChallenges = db.prepare("SELECT count(*) AS count FROM nickname_challenges");
+  const countCardChallenges = db.prepare("SELECT count(*) AS count FROM nickname_challenges WHERE chip_id = ?");
+  const pendingChallenge = db.prepare("SELECT nonce FROM nickname_challenges WHERE chip_id = ? AND nickname = ?");
+  const insertChallenge = db.prepare("INSERT INTO nickname_challenges (nonce, chip_id, nickname, expires_at) VALUES (?, ?, ?, ?)");
+  const challenge = db.prepare(`
+    SELECT chip_id AS chipId, nickname_challenges.nickname, mac_key AS key
+    FROM nickname_challenges INNER JOIN cards USING (chip_id)
+    WHERE nonce = ? AND expires_at > ?
+  `);
+
+  function transaction(operation) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const value = operation();
+      db.exec("COMMIT");
+      return value;
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
 
   return {
     register(chipId, key) {
@@ -83,25 +121,42 @@ export function openBoard(path) {
       return lookup.get(chipId)?.mac_key;
     },
     publish(chipId, key, programs, result, nickname) {
-      db.exec("BEGIN IMMEDIATE");
-      try {
-        let published;
+      return transaction(() => {
         const current = lookup.get(chipId)?.mac_key;
-        if (current && timingSafeEqual(current, key)) {
-          record.run(chipId, programs, result.score, result.solved, result.instructions, result.cycles,
-            result.ticks, new Date().toISOString());
-          if (nickname) rename.run(nickname, chipId);
-          published = entry.get(chipId);
-        }
-        db.exec("COMMIT");
-        return published;
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
-      }
+        if (!current || !timingSafeEqual(current, key)) return;
+        record.run(chipId, programs, result.score, result.solved, result.instructions, result.cycles,
+          result.ticks, new Date().toISOString());
+        if (nickname) setInitialNickname.run(nickname, chipId);
+        return entry.get(chipId);
+      });
     },
-    entries() {
-      return entries.all();
+    issueNicknameChallenge(chipId, key, nickname, now) {
+      return transaction(() => {
+        const current = lookup.get(chipId)?.mac_key;
+        if (!current || !timingSafeEqual(current, key) || !entry.get(chipId)) return;
+        pruneChallenges.run(now);
+        const pending = pendingChallenge.get(chipId, nickname);
+        if (pending) return pending.nonce;
+        if (countCardChallenges.get(chipId).count >= maxCardChallenges || countChallenges.get().count >= maxChallenges) return;
+        const nonce = randomBytes(16).toString("hex");
+        insertChallenge.run(nonce, chipId, nickname, now + nicknameChallengeLifetime);
+        return nonce;
+      });
+    },
+    nicknameChallenge(nonce, now) {
+      return challenge.get(nonce, now);
+    },
+    changeNickname(nonce, key, now) {
+      return transaction(() => {
+        const pending = challenge.get(nonce, now);
+        if (!pending || !timingSafeEqual(pending.key, key)) return;
+        clearChallenges.run(pending.chipId);
+        rename.run(pending.nickname, pending.chipId);
+        return entry.get(pending.chipId);
+      });
+    },
+    entries(limit, offset) {
+      return entries.all(limit, offset);
     },
     close() {
       db.close();

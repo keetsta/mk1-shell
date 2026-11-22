@@ -12,6 +12,7 @@
 #ifndef MK1_TOKEN_H
 #define MK1_TOKEN_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define TOKEN_VERSION 1
@@ -19,8 +20,12 @@
 #define TOKEN_SOLS_MAX 1500   /* the entries: the card's best programs, kept in its state and sent */
 #define TOKEN_BIN_MAX (1 + 8 + TOKEN_SOLS_MAX + TOKEN_MAC)
 #define TOKEN_TEXT_MAX ((TOKEN_BIN_MAX + 2) / 3 * 4 + 1)
+#define TOKEN_NICK_NONCE 16
+#define TOKEN_NICK_MAX 96
 
 void token_card_key(const uint8_t randid[16], uint8_t key[32]);
+int token_nickname_proof(const uint8_t chipid[8], const uint8_t key[32], const uint8_t nonce[TOKEN_NICK_NONCE],
+                         const uint8_t *nickname, size_t len, uint8_t proof[32]);
 
 /* the entries lie end to end and fill exactly sols_len bytes */
 int token_entries_ok(const uint8_t *sols, int sols_len);

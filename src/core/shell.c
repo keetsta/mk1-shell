@@ -48,34 +48,9 @@ _Static_assert(sizeof(saved_2) == 2568 && offsetof(saved, sols_len) == sizeof(sa
                "the old state is the start of the new one, byte for byte");
 _Static_assert(sizeof(saved) <= HAL_STATE_MAX, "the state must fit the card's flash sector");
 
-/* In the dump in plain text, and printed by the commands people reach for first.
- * The dragon is ASCII art by Jcro...@vt.edu (its signature lives here, not on screen),
- * the lettering is figlet's "standard" font with kerning. */
-static const char DRAGON[] =
-    "         \\`----.__                 ____\n"
-    "          |       `--._         <=#  , *--,\n"
-    "         /_             `-.    ,/  / `````\n"
-    "           \\__             (_.'  ,'\n"
-    "              \\__ ......'       \\___----^__\n"
-    "           _./               ,'           `.\n"
-    "  |\\     _.'   ___/ )\\...._\"   ___           \\\n"
-    "  | \\__.'  __.'            `\"\"'   `\"\"`.'\"\"\"`--\\\n"
-    "   \\____.-'\n"
-    "\n"
-    "   _    _                                   _  _  _   _\n"
-    "  | |_ | |__    ___  _ __  ___  __      __ (_)| || | | |__    ___\n"
-    "  | __|| '_ \\  / _ \\| '__|/ _ \\ \\ \\ /\\ / / | || || | | '_ \\  / _ \\\n"
-    "  | |_ | | | ||  __/| |  |  __/  \\ V  V /  | || || | | |_) ||  __/\n"
-    "   \\__||_| |_| \\___||_|   \\___|   \\_/\\_/   |_||_||_| |_.__/  \\___|\n"
-    "\n"
-    "       _                                        _\n"
-    "    __| | _ __  __ _   __ _   ___   _ __   ___ | |\n"
-    "   / _` || '__|/ _` | / _` | / _ \\ | '_ \\ / __|| |\n"
-    "  | (_| || |  | (_| || (_| || (_) || | | |\\__ \\|_|\n"
-    "   \\__,_||_|   \\__,_| \\__, | \\___/ |_| |_||___/(_)\n"
-    "                      |___/\n";
 static const char DRAGONS[] = "there will be dragons!";
 static const char BANNER[] = "\nmk-1. type help\n";
+static const char HEX[] = "0123456789abcdef";
 
 static const char HELP[] =
     "  man [n]     the manual, chapter n\n"
@@ -109,7 +84,7 @@ static uint16_t shown[VM_ROWS];
    every change of what the card's screen shows goes back to it as an OSC the page's terminal hides. The
    platform says what that is (shell_screen): on the card it is not always the shell's matrix */
 static int web, osc_st, osc_len;
-static char osc[40];
+static char osc[sizeof "7777;nick;" + 2 * TOKEN_NICK_NONCE + 1 + 2 * TOKEN_NICK_MAX];
 static uint8_t screen[VM_ROWS * 16]; /* levels 0..15, row 0 first, left to right */
 static uint8_t chbuf[CHAPTER_MAX];
 static const char *more_p;         /* what the pager has not shown yet */
@@ -157,7 +132,7 @@ static void prompt(void)
 /* ESC ] 7777 ; f ; <144 hex digits, one level per LED, row 0 first, left to right> BEL */
 static void send_frame(void)
 {
-    static const char HEX[] = "0123456789abcdef", HEAD[] = "\x1b]7777;f;";
+    static const char HEAD[] = "\x1b]7777;f;";
     char b[sizeof HEAD - 1 + sizeof screen + 1];
     memcpy(b, HEAD, sizeof HEAD - 1);
     for (size_t i = 0; i < sizeof screen; i++)
@@ -196,7 +171,13 @@ static void show(const uint16_t rows[VM_ROWS])
     }
 }
 
-static void save(void) { hal_save(&st, sizeof st); }
+static int save(void)
+{
+    int result = hal_save(&st, sizeof st);
+    if (result)
+        out("could not save progress; changes are only in this session\n");
+    return result;
+}
 
 /* ---- pager -------------------------------------------------------------------- */
 
@@ -442,12 +423,12 @@ static void edit_line(const char *l)
     if (!strcmp(p, ".")) {
         char err[96];
         memcpy(st.prog, editbuf, (size_t)editlen + 1);
-        save();
+        const char *status = save() ? "program in memory" : "saved";
         mode = M_LINE;
         if (vm_assemble(&vm, st.prog, err, sizeof err))
-            outf("saved, but: %s\n", err);
+            outf("%s, but: %s\n", status, err);
         else
-            outf("saved, %d instruction%s\n", vm.n, vm.n == 1 ? "" : "s");
+            outf("%s, %d instruction%s\n", status, vm.n, vm.n == 1 ? "" : "s");
         return;
     }
     size_t n = strlen(l);
@@ -538,7 +519,7 @@ static void cmd_try(const char *arg)
 
 static void cmd_dragon(void)
 {
-    out(DRAGON);
+    outf("%s\n", DRAGONS);
     marquee_start(&mq, DRAGONS);
     mq_on = 1;
     mq_div = 0;
@@ -843,18 +824,63 @@ void shell_tick(void)
     }
 }
 
+static void hex_write(char *text, const uint8_t *data, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        text[2 * i] = HEX[data[i] >> 4];
+        text[2 * i + 1] = HEX[data[i] & 15];
+    }
+    text[2 * n] = 0;
+}
+
+static int hex_read(uint8_t *data, const char *text, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        const char *hi = memchr(HEX, text[2 * i], sizeof HEX - 1);
+        const char *lo = memchr(HEX, text[2 * i + 1], sizeof HEX - 1);
+        if (!hi || !lo)
+            return -1;
+        data[i] = (uint8_t)((hi - HEX) * 16 + (lo - HEX));
+    }
+    return 0;
+}
+
+static void nick_reply(const char *fields, size_t n)
+{
+    size_t name_at = 2 * TOKEN_NICK_NONCE + 1;
+    if (n <= name_at || n > name_at + 2 * TOKEN_NICK_MAX || (n - name_at) % 2 || fields[name_at - 1] != ';')
+        return;
+    uint8_t nonce[TOKEN_NICK_NONCE], name[TOKEN_NICK_MAX], proof[32];
+    size_t name_len = (n - name_at) / 2;
+    if (hex_read(nonce, fields, sizeof nonce) || hex_read(name, fields + name_at, name_len))
+        return;
+    char proof_hex[2 * sizeof proof + 1];
+    if (token_nickname_proof(card_id, card_key, nonce, name, name_len, proof))
+        return;
+    hex_write(proof_hex, proof, sizeof proof);
+    outf("\x1b]7777;nick;%.*s;%s\a", (int)(2 * sizeof nonce), fields, proof_hex);
+}
+
 /* an OSC from the page has ended */
 static void osc_end(void)
 {
-    if (osc_len >= (int)sizeof osc)
-        return;                  /* too long to be ours */
+    if (osc_len >= (int)sizeof osc || memchr(osc, 0, (size_t)osc_len))
+        return;
     osc[osc_len] = 0;
     if (!strcmp(osc, "7777;hello")) {
         web = 1;
         out("\x1b]7777;mk1;2;" MK1_VERSION "\a");
+        if (card) {
+            char chip[2 * sizeof card_id + 1];
+            hex_write(chip, card_id, sizeof card_id);
+            outf("\x1b]7777;chip;%s\a", chip);
+        }
         send_frame();
     } else if (!strcmp(osc, "7777;bye")) {
         web = 0;
+    } else if (web && card && !strncmp(osc, "7777;nick;", sizeof "7777;nick;" - 1)) {
+        size_t prefix = sizeof "7777;nick;" - 1;
+        nick_reply(osc + prefix, (size_t)osc_len - prefix);
     }
 }
 
@@ -873,10 +899,14 @@ void shell_input(char c)
         }
         return;
     }
-    if (osc_st == 3) {           /* ESC inside an OSC: ESC \ ends it, anything else drops it */
+    if (osc_st == 3) {
         osc_st = 0;
         if (c == '\\')
             osc_end();
+        else if (c == ']') {
+            osc_st = 2;
+            osc_len = 0;
+        }
         return;
     }
     if (osc_st == 1) {
@@ -911,7 +941,10 @@ void shell_connect(void)
     }
 }
 
-void shell_disconnect(void) { web = 0; }
+void shell_disconnect(void)
+{
+    web = osc_st = osc_len = esc = esc_arg = last_cr = 0;
+}
 
 int shell_running(void) { return mode == M_RUN; }
 

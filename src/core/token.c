@@ -15,6 +15,22 @@ void token_card_key(const uint8_t randid[16], uint8_t key[32])
     sha256_final(&c, key);
 }
 
+int token_nickname_proof(const uint8_t chipid[8], const uint8_t key[32], const uint8_t nonce[TOKEN_NICK_NONCE],
+                         const uint8_t *nickname, size_t len, uint8_t proof[32])
+{
+    static const char domain[] = "mk1/board-nickname/v1";
+    uint8_t data[sizeof domain + 8 + TOKEN_NICK_NONCE + TOKEN_NICK_MAX];
+    if (!len || len > TOKEN_NICK_MAX)
+        return -1;
+    memcpy(data, domain, sizeof domain);
+    memcpy(data + sizeof domain, chipid, 8);
+    memcpy(data + sizeof domain + 8, nonce, TOKEN_NICK_NONCE);
+    size_t prefix = sizeof domain + 8 + TOKEN_NICK_NONCE;
+    memcpy(data + prefix, nickname, len);
+    hmac_sha256(key, 32, data, prefix + len, proof);
+    return 0;
+}
+
 int token_entries_ok(const uint8_t *sols, int sols_len)
 {
     int k = 0;

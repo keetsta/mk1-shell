@@ -40,7 +40,8 @@ test('derives the firmware identity and transfers it only through ssh stdin', ()
   assert.deepEqual(calls[0].options.stdio, ['ignore', 'pipe', 'pipe']);
   assert.equal(calls[1].command, 'ssh');
   assert.deepEqual(calls[1].args, [
-    '-T', '--', 'admin@mk1-server', "node '/srv/mk1 owner'\\''s repo/server/admin.mjs' register",
+    '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '--', 'admin@mk1-server',
+    "node '/srv/mk1 owner'\\''s repo/server/admin.mjs' register",
   ]);
   assert.deepEqual(calls[1].options.stdio, ['pipe', 'ignore', 'ignore']);
   assert.deepEqual(JSON.parse(calls[1].options.input), identity);
@@ -71,7 +72,7 @@ test('ssh registration quotes the configured remote node executable', () => {
   assert.equal(calls.length, 2);
   assert.equal(calls[1].command, 'ssh');
   assert.deepEqual(calls[1].args, [
-    '-T', '--', 'admin@mk1-server',
+    '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '--', 'admin@mk1-server',
     "'/srv/node owner'\\''s bin/node' '/srv/mk1 owner'\\''s repo/server/admin.mjs' register",
   ]);
 });

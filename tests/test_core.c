@@ -94,6 +94,7 @@ void hal_exit(void) { exited = 1; }
 /* the state as the card keeps it: one record, loaded only at its exact size */
 static uint8_t store[8192];
 static size_t store_n;
+static int fail_save;
 int hal_load(void *buf, size_t n)
 {
     if (!store_n || n != store_n)
@@ -101,12 +102,13 @@ int hal_load(void *buf, size_t n)
     memcpy(buf, store, n);
     return 1;
 }
-void hal_save(const void *buf, size_t n)
+int hal_save(const void *buf, size_t n)
 {
-    if (n <= HAL_STATE_MAX) {
-        memcpy(store, buf, n);
-        store_n = n;
-    }
+    if (fail_save || n > HAL_STATE_MAX)
+        return -1;
+    memcpy(store, buf, n);
+    store_n = n;
+    return 0;
 }
 
 static void type(const char *s)
@@ -367,6 +369,9 @@ static void test_board(const char *dir)
 {
     static uint8_t bin[TOKEN_BIN_MAX];
     static char lamp_nop[sizeof LAMP + 8];
+    static const char request[] = "\x1b]7777;nick;aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;c3a978\a";
+    static const char reply[] = "\x1b]7777;nick;aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;"
+                                "53ed88b9085eb0c566d488f668b6c8e378b1b5e44d01d2618f2899477915865c\a";
     token_parts tk;
     uint8_t key[32];
     char path[512], err[96], *sol2;
@@ -377,7 +382,23 @@ static void test_board(const char *dir)
     shell_init();
     type("top\r");
     CHECK(said("only a real mk-1 card can go on the board"));
+    type("\x1b]7777;hello\a");
+    CHECK(!said("\x1b]7777;chip;"));
+    type(request);
+    CHECK(!outbuf[0]);
+    shell_disconnect();
     shell_card(test_chipid, test_randid);
+    type(request);
+    CHECK(!outbuf[0]);
+    type("\x1b]7777;hello\a");
+    CHECK(said("\x1b]7777;mk1;2;" MK1_VERSION "\a\x1b]7777;chip;0102030405060708\a"));
+    type(request);
+    CHECK(!strcmp(outbuf, reply));
+    type("\x1b]7777;nick;aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;c3A978\a");
+    CHECK(!outbuf[0]);
+    type("\x1b]7777;nick;aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;0\a");
+    CHECK(!outbuf[0]);
+    shell_disconnect();
     type("top\r");
     CHECK(said("solve a task to get on the board"));
     /* the best program is kept: a shorter one replaces it, a longer one does not */
@@ -567,7 +588,7 @@ int main(int argc, char **argv)
     type("try mov 1 btn\r");
     CHECK(said("read-only"));
     type("sudo rm -rf /\r");
-    CHECK(said("<=#  , *--,") && said("\\__,_||_|   \\__,_|") && said("|___/") && !said("Art by"));
+    CHECK(said("there will be dragons!") && !said("Art by"));
     matrix_lit = 0;
     for (int i = 0; i < 100; i++)
         shell_tick();
@@ -835,6 +856,20 @@ int main(int argc, char **argv)
     shell_disconnect();
     type("try mov 3 pix\r");
     CHECK(!said("\x1b]7777;f;"));
+    type("he\x1b]7777;unclosed");
+    shell_disconnect();
+    type("lp\r");
+    CHECK(said("man [n]"));
+    type("\x1b]7777;unclosed\x1b]7777;hello\a");
+    CHECK(said("\x1b]7777;mk1;2;" MK1_VERSION "\a"));
+    shell_disconnect();
+
+    fail_save = 1;
+    type("edit\rnop\r.\r");
+    CHECK(said("could not save progress") && said("program in memory, 1 instruction") && !said("saved,"));
+    type("list\r");
+    CHECK(said(" 1| nop"));
+    fail_save = 0;
     /* arrows still work after all that */
     type("help\r\x1b[A");
     CHECK(!strcmp(shown(), "mk1> help"));

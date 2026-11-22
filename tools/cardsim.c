@@ -40,7 +40,7 @@ uint16_t hal_lux(void) { return 600; }
 int hal_rows(void) { return 0; }
 void hal_exit(void) { face_exit(); }
 int hal_load(void *buf, size_t n) { (void)buf, (void)n; return 0; }
-void hal_save(const void *buf, size_t n) { (void)buf, (void)n; }
+int hal_save(const void *buf, size_t n) { (void)buf, (void)n; return 0; }
 
 static void put(int x, int y, const unsigned char c[3])
 {
