@@ -1,62 +1,118 @@
 # mk1-shell
 
-прошивка и терминальный эмулятор визитки mk-1. внутри выдуманный чип, мануал с пропусками и задачи на ассемблере. поэкспериментировать с чипом можно через `try`.
+Firmware for mk-1, a USB-C business card built around an RP2350 and a 16 × 9 LED matrix. Connect a terminal to program a fictional chip in assembly. The manual has missing pieces, and the shell gives you a way to test what each instruction does.
 
-[открыть mk-1 в браузере](https://keetsta.me/mk1/) · [лидерборд](https://keetsta.me/mk1/top/)
+**[Open mk-1](https://keetsta.me/mk1/)** · [Firmware releases](https://github.com/keetsta/mk1-shell/releases) · [Leaderboard](https://keetsta.me/mk1/top/)
 
-## быстрый старт
+<picture>
+  <source media="(max-width: 600px)" srcset="docs/media/mk1-shell-narrow.webp">
+  <img src="docs/media/mk1-shell.webp" alt="The mk-1 business card and its 16 × 9 LED matrix">
+</picture>
 
-нужны компилятор C11, make и терминал на linux или macos.
+## Try one instruction
+
+Choose **try it here** on the mk-1 site, or open a terminal on your card. At the mk-1 prompt, enter these two commands.
+
+```text
+try mov 42 a
+regs
+```
+
+`try` executes one instruction in the shell's scratch state. The first command sets register `a` to `42`, and `regs` reads that state back. Use `man` to read the manual, `tasks` to find a puzzle, and `help` for the command list.
+
+## The matrix on the card
+
+Programs can draw on the card's 144 LEDs and read its button and light sensor. An IS31FL3731 drives the matrix, and the firmware adjusts brightness to ambient light.
+
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="docs/media/matrix-in-motion.webp">
+  <img src="docs/media/matrix-in-motion.gif" alt="Simulated mk-1 matrix showing boot, standby, and a screensaver">
+</picture>
+
+The simulator shows power-on and standby on the left, with the cube screensaver on the right.
+
+When the main firmware is idle, press the button to show the site address. The card starts a screensaver after five minutes of inactivity and sleeps after an hour. Ctrl+D at an empty prompt returns the matrix to the card. A running program keeps control until it stops, even if you close the terminal.
+
+## One core, three runtimes
+
+The assembler, virtual chip, puzzles, and shell live in [`src/core/`](src/core/). Each runtime implements the same [hardware abstraction](src/core/hal.h) for terminal I/O, the matrix, the button, the light sensor, and saved progress.
+
+| Runtime | What it connects to |
+| --- | --- |
+| [RP2350 card](src/card/) | USB serial, the physical matrix and sensors, and a flash save journal |
+| [POSIX terminal](src/host/) | A terminal with the matrix above the prompt, keyboard controls, and a local save file |
+| [WebAssembly](https://github.com/keetsta/mk1-web) | The browser terminal, a virtual matrix, and virtual controls |
+
+The [technical specification](SPEC.md) covers the serial protocol, save compatibility, and leaderboard contracts.
+
+## Open a terminal
+
+**On a card.** Connect it over USB-C and choose **connect the card** on the mk-1 site in a browser with Web Serial. In a standalone serial terminal, open the card's USB port at 115200 baud with DTR enabled.
+
+**On Linux or macOS.** With a C11 compiler and `make` installed, build and launch the emulator.
 
 ```sh
 make
 make run
-make test
 ```
 
-`help` показывает команды. начни с `man` и `tasks`. в эмуляторе матрица находится над терминалом.
+The emulator saves progress in `~/.mk1-shell`. Set `MK1_STATE` to choose another path.
 
-| действие | клавиши |
+<details>
+<summary>Terminal controls</summary>
+
+| Action | Keys |
 | --- | --- |
-| история и очистка экрана | стрелки ↑ ↓ и `cls` |
-| чтение длинной главы | пробел листает страницу, enter строку, `q` закрывает главу |
-| кнопка и датчик света во время программы | пробел, `+` и `-` |
-| остановка программы и выход из шелла | ctrl+c и ctrl+d на пустой строке |
+| Recall a command or clear the screen | <kbd>↑</kbd> / <kbd>↓</kbd> or `cls` |
+| Page through the manual | <kbd>Space</kbd> for a page, <kbd>Enter</kbd> for a line, <kbd>q</kbd> to close |
+| Press the virtual button or adjust virtual light | <kbd>Space</kbd> or <kbd>+</kbd> / <kbd>-</kbd> while a program runs |
+| Stop a program or exit the shell | <kbd>Ctrl</kbd>+<kbd>C</kbd> or <kbd>Ctrl</kbd>+<kbd>D</kbd> on an empty line |
 
-эмулятор хранит состояние в `~/.mk1-shell`. путь меняется переменной `MK1_STATE`.
+</details>
 
-## прошивка
+## Install firmware
 
-для сборки нужны pico-sdk 2.3.1, arm gnu toolchain, cmake, ninja и picotool. задай `PICO_SDK_PATH` и при необходимости `PICO_TOOLCHAIN_PATH`. параметр `PICOTOOL_DIR` указывает на готовую установку picotool.
+On the mk-1 site, open **firmware** to install the latest release or select a local UF2. The installer checks the release SHA-256, rejects images that touch saved progress, and reads the written sectors back before restarting.
+
+When the connected card already runs 0.1.2 or later, the installer matches its chip ID to the chosen bootloader. For older firmware, unplug the other boards, hold BOOTSEL while connecting the target card, and confirm the selected bootloader.
+
+| Release asset | What runs on the card |
+| --- | --- |
+| `mk1.uf2` | USB shell, standby screen, and matrix screensavers |
+| `mk1-demo.uf2` | The same shell with Pong on a button press and a spinning cube on a long press |
+
+<details>
+<summary>Install from the RP2350 drive</summary>
+
+For firmware 0.1.2 or later, hold BOOTSEL while plugging in the card and copy the UF2 to the `RP2350` drive.
+
+Use WebUSB for older UF2 files with the RP2350-E10 workaround block in the last sector. Copying such an image to the drive on an RP2350 A2 can erase part of the save journal.
+
+</details>
+
+## Publish a result
+
+`check` verifies a solution and saves your best program for that task. After solving a task, run `top` on a registered card to get a submission link. The leaderboard verifies the card signature and reruns the submitted programs to calculate the score.
+
+Keep the link private because it includes your solutions and can be reused to submit them. To confirm a change to an existing nickname, connect the card to the web terminal.
+
+See how to [run the service and register cards](server/README.md).
+
+## Develop and release
+
+Run `make test` to check the shell core, card UI, and demo. The standard build uses the committed `src/core/content_gen.c`. To test reference solutions, clone the private `mk1-content` repository into `content/`. Run `make content` after editing that content.
+
+<details>
+<summary>Build the firmware and render matrix previews</summary>
+
+Install Pico SDK 2.3.1, the Arm GNU Toolchain, CMake, Ninja, and picotool. Set `PICO_SDK_PATH` and, if needed, `PICO_TOOLCHAIN_PATH`. Use `PICOTOOL_DIR` to point to an existing picotool installation.
 
 ```sh
 make card
 make demo
 ```
 
-| файл | что на карте |
-| --- | --- |
-| `build/card/mk1.uf2` | шелл по usb, ожидание и заставки матрицы |
-| `build/card/mk1-demo.uf2` | тот же шелл, понг по нажатию кнопки и кубик по удержанию |
-
-на странице mk-1 открой **firmware**, чтобы установить релиз или выбрать свой uf2. для ручной установки зажми BOOTSEL при подключении и скопируй uf2 на диск `RP2350`. начиная с 0.1.2 служебный блок RP2350-E10 расположен вне кольца сохранений. старые uf2 с этим блоком в последнем секторе устанавливай через WebUSB: на RP2350 A2 ручное копирование может стереть этот сектор.
-
-### публикация релиза
-
-запушь нужный коммит в `main` и поставь на него тег `vMAJOR.MINOR.PATCH`. например, для версии `0.1.3`:
-
-```sh
-git tag -a v0.1.3 -m v0.1.3
-git push origin refs/tags/v0.1.3
-```
-
-GitHub Actions возьмёт версию прошивки из тега, соберёт `mk1.uf2` и `mk1-demo.uf2` и опубликует их в [GitHub Releases](https://github.com/keetsta/mk1-shell/releases). описание содержит заголовки коммитов со времени предыдущего тега версии. для первого тега берётся вся история до него.
-
-сайт запрашивает версию, дату и SHA-256 напрямую из GitHub Releases. для установки через WebUSB workflow сохраняет те же байты `mk1.uf2` в служебной ветке `firmware-assets` по версии и SHA-256. браузер скачивает их с `raw.githubusercontent.com`, где GitHub разрешает CORS. репозиторий должен быть публичным.
-
-### матрица
-
-на карте стоит IS31FL3731, яркость меняется по датчику света. без терминала основная прошивка показывает приглашение и адрес страницы. через пять минут выбирает заставку, через час уходит в сон. `ctrl+d` возвращает экран карте. программа, запущенная до закрытия порта, продолжает управлять матрицей до остановки.
+The build writes `build/card/mk1.uf2` and `build/card/mk1-demo.uf2`. The preview commands use FFmpeg and write videos to `build/`.
 
 ```sh
 make preview
@@ -65,28 +121,24 @@ make preview-update
 make preview-demo
 ```
 
-для видео нужен ffmpeg. файлы появляются в `build/`.
+</details>
 
-## лидерборд
+<details>
+<summary>Publish a firmware release</summary>
 
-`check` сохраняет лучшую проверенную программу для каждой задачи. после первой решённой задачи команда `top` выдаёт ссылку для публикации с зарегистрированной карты. сервер заново выполняет программы и считает результат. ссылка включает решения и позволяет повторную публикацию, поэтому её стоит хранить приватно. смену установленного ника подтверждает подключённая карта.
+Push the release commit to `main`, then tag it `vMAJOR.MINOR.PATCH`. To publish 0.1.3, run these commands from that commit.
 
-[запуск сервиса и регистрация карт](server/README.md)
+```sh
+git tag -a v0.1.3 -m v0.1.3
+git push origin refs/tags/v0.1.3
+```
 
-## исходники
+GitHub Actions uses the tag as the firmware version, builds both UF2 files, and publishes them to GitHub Releases. The notes list commit subjects since the previous version tag. The first release lists the full history up to its tag.
 
-| путь | назначение |
-| --- | --- |
-| [`src/core/`](src/core/) | виртуальный чип, ассемблер, задачи, шелл и протокол токена |
-| [`src/card/`](src/card/) | прошивка RP2350, матрица, экраны и журнал состояния |
-| [`src/host/`](src/host/) | posix-эмулятор |
-| [`demo/`](demo/) и [`tools/`](tools/) | демо-прошивка, симулятор экрана и генератор контента |
-| [`server/`](server/) | api лидерборда, регистрация и проверка программ в wasm |
+The workflow also puts the same `mk1.uf2` on the `firmware-assets` branch under a path containing the version and checksum. When a public repository is configured as the site's release source, the browser reads the version, publication date, and SHA-256 from GitHub Releases and downloads the matching bytes from `raw.githubusercontent.com` for WebUSB installation.
 
-веб-эмулятор собирается из этих же исходников в [mk1-web](https://github.com/keetsta/mk1-web). [спека](SPEC.md) содержит спойлеры. аппаратная часть живёт в `mk1-card`.
+</details>
 
-тексты и эталонные решения хранятся в отдельном приватном `mk1-content`. стандартная сборка использует отслеживаемый `src/core/content_gen.c`. без локального `content/` тесты пропускают проверки эталонных решений. с доступом к приватному репо положи его в `content/` и после правок выполни `make content`.
+## License
 
-## лицензия
-
-[MIT](LICENSE) для оригинального кода и документации. [сторонние материалы](THIRD_PARTY_NOTICES.md) имеют отдельные условия.
+Original code and documentation are licensed under the [MIT License](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) for materials covered by separate terms.

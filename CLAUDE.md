@@ -1,6 +1,6 @@
 # mk1-shell
 
-прошивка визитки mk-1 и posix-эмулятор. `src/core/` также работает в wasm на [mk1-web](https://github.com/keetsta/mk1-web). аппаратная часть описана в `mk1-card/CLAUDE.md`, сборка в [README](README.md), механика со спойлерами в [SPEC](SPEC.md).
+прошивка визитки mk-1 и posix-эмулятор. `src/core/` также работает в wasm на [mk1-web](https://github.com/keetsta/mk1-web). аппаратная часть описана в `mk1-card/CLAUDE.md`, сборка в [README](README.md), технические контракты в [SPEC](SPEC.md).
 
 ## сборка и контент
 
