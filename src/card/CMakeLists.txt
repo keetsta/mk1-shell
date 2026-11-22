@@ -24,10 +24,17 @@ set(MK1_FLASH_BOUNDS "${CMAKE_CURRENT_BINARY_DIR}/mk1_flash_bounds.ld")
 file(GENERATE OUTPUT "${MK1_FLASH_BOUNDS}"
      CONTENT "ASSERT(__flash_binary_end <= ${MK1_E10_SECTOR}, \"firmware overlaps the reserved E10 sector\")\n")
 
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CORE}/shell.h")
-file(STRINGS ${CORE}/shell.h MK1_VERSION_LINE REGEX "#define MK1_VERSION ")
-string(REGEX MATCH "\"([^\"]+)\"" _ ${MK1_VERSION_LINE})
-set(MK1_VERSION ${CMAKE_MATCH_1})
+set(MK1_RELEASE_VERSION "" CACHE STRING "Version of a tagged mk-1 release")
+set(MK1_VERSION "${MK1_RELEASE_VERSION}")
+if (MK1_VERSION STREQUAL "")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CORE}/shell.h")
+    file(STRINGS ${CORE}/shell.h MK1_VERSION_LINE REGEX "^#define MK1_VERSION ")
+    string(REGEX MATCH "\"([^\"]+)\"" _ ${MK1_VERSION_LINE})
+    set(MK1_VERSION "${CMAKE_MATCH_1}")
+endif()
+if (NOT MK1_VERSION MATCHES "^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$")
+    message(FATAL_ERROR "invalid mk-1 version: ${MK1_VERSION}")
+endif()
 
 # the card's firmware and the demo's differ only in the card's own screens (own.h), passed after the name
 function(mk1_firmware name product description)
@@ -36,6 +43,7 @@ function(mk1_firmware name product description)
         ${CORE}/vm.c ${CORE}/sha256.c ${CORE}/tasks.c ${CORE}/token.c ${CORE}/font.c ${CORE}/shell.c ${CORE}/content_gen.c)
     target_compile_options(${name} PRIVATE -Wall -Wextra)
     target_compile_definitions(${name} PRIVATE
+        MK1_VERSION="${MK1_VERSION}"
         MK1_STORE_SECTORS=${MK1_STORE_SECTORS}
         MK1_E10_OFFSET=${MK1_E10_OFFSET}
         USBD_MANUFACTURER="keetsta"

@@ -9,7 +9,7 @@ CARD = src/card/face.c src/card/prompt.c src/card/cube.c src/card/saver.c src/ca
 CARD_HDRS = $(wildcard src/card/*.h)
 DEMO = demo/own.c demo/pong.c
 DEMO_HDRS = $(wildcard demo/*.h)
-CARD_CMAKE = cmake -S src/card -B build/card -G Ninja -DCMAKE_BUILD_TYPE=Release $(if $(PICOTOOL_DIR),-Dpicotool_DIR=$(PICOTOOL_DIR))
+CARD_CMAKE = cmake -S src/card -B build/card -G Ninja -DCMAKE_BUILD_TYPE=Release -DMK1_RELEASE_VERSION=$(MK1_RELEASE_VERSION) $(if $(PICOTOOL_DIR),-Dpicotool_DIR=$(PICOTOOL_DIR))
 
 all: build/mk1 build/test build/test-card build/test-demo
 

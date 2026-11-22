@@ -1,0 +1,92 @@
+name: Release firmware
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: firmware-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: ${{ !github.event.deleted }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check firmware tag and prepare notes
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Use a stable tag such as v0.1.2."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "::error::Tag a commit from main to publish official firmware."
+            exit 1
+          fi
+          bash tools/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/mk1-release-notes.md"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: raspberrypi/pico-sdk
+          ref: 079c6f39023649b154152db30f1d781e884879bc # 2.3.1
+          path: .release/pico-sdk
+          persist-credentials: false
+      - name: Install firmware toolchain
+        run: |
+          git -C .release/pico-sdk submodule update --init lib/tinyusb
+          tools="$RUNNER_TEMP/mk1-tools"
+          mkdir -p "$tools"
+          cd "$tools"
+          curl --fail --silent --show-error --location --retry 3 --max-time 180 \
+            -o arm-gnu.tar.xz 'https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi.tar.xz'
+          curl --fail --silent --show-error --location --retry 3 --max-time 120 \
+            -o picotool.tar.gz 'https://github.com/raspberrypi/pico-sdk-tools/releases/download/v2.3.1-0/picotool-2.3.1-x86_64-lin.tar.gz'
+          sha256sum --check <<'CHECKSUMS'
+          62a63b981fe391a9cbad7ef51b17e49aeaa3e7b0d029b36ca1e9c3b2a9b78823  arm-gnu.tar.xz
+          878a1a1e7d8336b8be60300c7218f366d9790c0d3a211b181d6d172e80b1248e  picotool.tar.gz
+          CHECKSUMS
+          tar -xf arm-gnu.tar.xz
+          tar -xf picotool.tar.gz
+          printf 'PICO_TOOLCHAIN_PATH=%s\n' "$tools/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi" >> "$GITHUB_ENV"
+          printf 'PICO_SDK_PATH=%s\n' "$GITHUB_WORKSPACE/.release/pico-sdk" >> "$GITHUB_ENV"
+          printf 'PICOTOOL_DIR=%s\n' "$tools/picotool" >> "$GITHUB_ENV"
+      - name: Test and build firmware
+        run: |
+          make test
+          make card demo MK1_RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          "$PICOTOOL_DIR/picotool" info build/card/mk1.uf2
+          "$PICOTOOL_DIR/picotool" info build/card/mk1-demo.uf2
+      - name: Publish GitHub release
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh auth setup-git --hostname github.com
+          bash tools/publish-firmware-asset.sh "$GITHUB_REF_NAME" build/card/mk1.uf2
+          if ! gh release view "$GITHUB_REF_NAME" --json tagName >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
+              --notes-file "$RUNNER_TEMP/mk1-release-notes.md" \
+              build/card/mk1.uf2 build/card/mk1-demo.uf2 LICENSE THIRD_PARTY_NOTICES.md
+          fi
+          main_digest=$(sha256sum build/card/mk1.uf2 | cut -d ' ' -f 1)
+          demo_digest=$(sha256sum build/card/mk1-demo.uf2 | cut -d ' ' -f 1)
+          gh api "repos/$GH_REPO/releases/tags/$GITHUB_REF_NAME" |
+            jq -e --arg main "sha256:$main_digest" --arg demo "sha256:$demo_digest" '
+              .draft == false and .prerelease == false and
+              any(.assets[]; .name == "mk1.uf2" and .state == "uploaded" and .digest == $main) and
+              any(.assets[]; .name == "mk1-demo.uf2" and .state == "uploaded" and .digest == $demo)
+            ' >/dev/null

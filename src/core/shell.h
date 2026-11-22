@@ -5,9 +5,10 @@
 #ifndef MK1_SHELL_H
 #define MK1_SHELL_H
 
-/* the firmware's version: the page shows it next to the latest release, whose tag is v<this>.
-   Bump it with every release */
+/* the default for local builds; tagged card builds take their version from the tag */
+#ifndef MK1_VERSION
 #define MK1_VERSION "0.1.2"
+#endif
 
 #include <stdint.h>
 
