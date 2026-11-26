@@ -45,6 +45,8 @@ The assembler, virtual chip, puzzles, and shell live in [`src/core/`](src/core/)
 
 The [technical specification](SPEC.md) covers the serial protocol, save compatibility, and leaderboard contracts.
 
+After the first two tasks, `observe` opens a live example. Use the card button or `n` to change diagnostic frames, and Ctrl+C to return to `try`. `screen` prints the matrix in narrow terminals. For the light receiver, cover the sensor with your hand or change the virtual card's light control.
+
 ## Open a terminal
 
 **On a card.** Connect it over USB-C and choose **connect the card** on the mk-1 site in a browser with Web Serial. In a standalone serial terminal, open the card's USB port at 115200 baud with DTR enabled.
@@ -96,6 +98,8 @@ Use WebUSB for older UF2 files with the RP2350-E10 workaround block in the last 
 ## Publish a result
 
 `check` verifies a solution and saves your best program for that task. After solving a task, run `top` on a registered card to get a submission link. The leaderboard verifies the card signature and reruns the submitted programs to calculate the score.
+
+`noise floor` opens after `shadow modem`. It awards 50 points for receiving clean packets and up to 150 more for recovering noisy packets. The bonus follows the current leaderboard record.
 
 Keep the link private because it includes your solutions and can be reused to submit them. To confirm a change to an existing nickname, connect the card to the web terminal.
 

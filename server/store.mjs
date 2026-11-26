@@ -35,7 +35,8 @@ export function openBoard(path) {
       instructions INTEGER NOT NULL,
       cycles INTEGER NOT NULL,
       ticks INTEGER NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      quality INTEGER CHECK (quality BETWEEN 0 AND 128)
     ) STRICT;
     CREATE INDEX IF NOT EXISTS result_rank ON results (score DESC, solved DESC, instructions, cycles, ticks, updated_at);
     CREATE TABLE IF NOT EXISTS nickname_challenges (
@@ -50,6 +51,9 @@ export function openBoard(path) {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('cards') WHERE name = 'nickname'").get()) {
     db.exec("ALTER TABLE cards ADD COLUMN nickname TEXT");
   }
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('results') WHERE name = 'quality'").get()) {
+    db.exec("ALTER TABLE results ADD COLUMN quality INTEGER CHECK (quality BETWEEN 0 AND 128)");
+  }
   db.exec("COMMIT");
 
   const register = db.prepare(`
@@ -61,8 +65,8 @@ export function openBoard(path) {
   const setInitialNickname = db.prepare("UPDATE cards SET nickname = ? WHERE chip_id = ? AND nickname IS NULL");
   const rename = db.prepare("UPDATE cards SET nickname = ? WHERE chip_id = ?");
   const record = db.prepare(`
-    INSERT INTO results (chip_id, programs, score, solved, instructions, cycles, ticks, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO results (chip_id, programs, score, solved, instructions, cycles, ticks, updated_at, quality)
+    VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (chip_id) DO UPDATE SET
       programs = excluded.programs,
       score = excluded.score,
@@ -70,15 +74,21 @@ export function openBoard(path) {
       instructions = excluded.instructions,
       cycles = excluded.cycles,
       ticks = excluded.ticks,
-      updated_at = excluded.updated_at
-    WHERE (excluded.score, excluded.solved, -excluded.instructions, -excluded.cycles, -excluded.ticks)
-        > (results.score, results.solved, -results.instructions, -results.cycles, -results.ticks)
+      updated_at = excluded.updated_at,
+      quality = excluded.quality
+    WHERE (coalesce(excluded.quality, -1), excluded.solved, -excluded.instructions, -excluded.cycles, -excluded.ticks)
+        > (coalesce(results.quality, -1), results.solved, -results.instructions, -results.cycles, -results.ticks)
   `);
+  const goalRecord = db.prepare("SELECT max(quality) AS quality FROM results");
   const resultFields = `
-    SELECT public_id AS card, nickname, score, solved, instructions, cycles, ticks, updated_at AS updatedAt
+    SELECT public_id AS card, nickname,
+      CASE WHEN quality IS NULL THEN results.score
+           ELSE 50 + coalesce(150 * quality / nullif(CAST($record AS INTEGER), 0), 0) END AS score,
+      solved, instructions, cycles, ticks, updated_at AS updatedAt, quality
     FROM results INNER JOIN cards USING (chip_id)
   `;
   const entry = db.prepare(resultFields + "WHERE chip_id = ?");
+  const hasEntry = db.prepare("SELECT 1 FROM results WHERE chip_id = ?");
   const entries = db.prepare(resultFields + `
     ORDER BY score DESC, solved DESC, instructions, cycles, ticks, updated_at, public_id
     LIMIT ? OFFSET ?
@@ -95,8 +105,8 @@ export function openBoard(path) {
     WHERE nonce = ? AND expires_at > ?
   `);
 
-  function transaction(operation) {
-    db.exec("BEGIN IMMEDIATE");
+  function transaction(operation, write = true) {
+    db.exec(write ? "BEGIN IMMEDIATE" : "BEGIN");
     try {
       const value = operation();
       db.exec("COMMIT");
@@ -105,6 +115,10 @@ export function openBoard(path) {
       db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  function readEntry(chipId) {
+    return entry.get({ record: goalRecord.get().quality }, chipId);
   }
 
   return {
@@ -124,16 +138,16 @@ export function openBoard(path) {
       return transaction(() => {
         const current = lookup.get(chipId)?.mac_key;
         if (!current || !timingSafeEqual(current, key)) return;
-        record.run(chipId, programs, result.score, result.solved, result.instructions, result.cycles,
-          result.ticks, new Date().toISOString());
+        record.run(chipId, programs, result.solved, result.instructions, result.cycles,
+          result.ticks, new Date().toISOString(), result.quality);
         if (nickname) setInitialNickname.run(nickname, chipId);
-        return entry.get(chipId);
+        return readEntry(chipId);
       });
     },
     issueNicknameChallenge(chipId, key, nickname, now) {
       return transaction(() => {
         const current = lookup.get(chipId)?.mac_key;
-        if (!current || !timingSafeEqual(current, key) || !entry.get(chipId)) return;
+        if (!current || !timingSafeEqual(current, key) || !hasEntry.get(chipId)) return;
         pruneChallenges.run(now);
         const pending = pendingChallenge.get(chipId, nickname);
         if (pending) return pending.nonce;
@@ -152,11 +166,14 @@ export function openBoard(path) {
         if (!pending || !timingSafeEqual(pending.key, key)) return;
         clearChallenges.run(pending.chipId);
         rename.run(pending.nickname, pending.chipId);
-        return entry.get(pending.chipId);
+        return readEntry(pending.chipId);
       });
     },
-    entries(limit, offset) {
-      return entries.all(limit, offset);
+    standings(limit, offset) {
+      return transaction(() => {
+        const record = goalRecord.get().quality;
+        return { entries: entries.all({ record }, limit, offset), record };
+      }, false);
     },
     close() {
       db.close();

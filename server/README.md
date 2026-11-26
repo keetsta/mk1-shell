@@ -34,11 +34,13 @@ node server/register-card.mjs --local --picotool (Join-Path $env:USERPROFILE '.p
 
 ## Scoring and trust
 
-- `GET` returns `entries`. Set `limit` to a page size from 1 to 100 and `offset` to a starting position from 0 to 10,000. The default page size is 100. The response includes `nextOffset` when another page exists. Per client IP, the service allows 120 reads and 12 submissions or confirmations per minute.
+- `GET` returns `entries` and `goal`. The goal contains `task`, `name`, `maxQuality`, and `record`. `record` is `null` until a card qualifies. Set `limit` to a page size from 1 to 100 and `offset` to a starting position from 0 to 10,000. The default page size is 100. The response includes `nextOffset` when another page exists. Per client IP, the service allows 120 reads and 12 submissions or confirmations per minute.
 - `POST` accepts JSON with a `token` and an optional `nickname` up to 24 characters long. The token can set a card's first nickname. Changing an existing nickname requires a fresh signature from the card.
 - The server verifies the HMAC, decodes the bytecode, and reruns each submitted solution. One solution is enough to publish a result.
 - The server reuses verification results for identical sets of programs while the process is running. It limits each card to six new verifications per minute.
-- The leaderboard keeps one best result per card. It ranks higher scores and more solved tasks first, then sorts by fewer instructions, fewer cycles, fewer ticks, and earlier update time. The current tasks award zero points.
+- Manual gates award zero points. Each result has `quality`, the number of noisy packets decoded by a qualifying `noise floor` program, or `null` for a result without a qualifying program.
+- `noise floor` awards 50 points for qualifying and `floor(150 × quality / record)` bonus points while the record is positive. Scores use the current record across registered cards, so a new record can lower the points of earlier submissions.
+- The leaderboard keeps one best result per card. It prefers higher quality, then more solved tasks, fewer instructions, fewer cycles, and fewer ticks. Standings sort by score first, followed by solved tasks and the same tie-breakers, with earlier update times first.
 - Keep your `top` link private. It includes the submitted programs and can be reused to publish them.
 - The HMAC proves possession of the card key. Verifying the running firmware requires a separate hardware chain of trust.
 

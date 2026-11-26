@@ -14,8 +14,9 @@ export async function loadScorer(wasm = new URL('./scorer.wasm', import.meta.url
         if (!result) return null;
 
         const totals = new DataView(memory.buffer, result, 20);
+        const qualityPlusOne = totals.getUint32(0, true);
         return {
-            score: totals.getUint32(0, true),
+            quality: qualityPlusOne ? qualityPlusOne - 1 : null,
             solved: totals.getUint32(4, true),
             instructions: totals.getUint32(8, true),
             cycles: totals.getUint32(12, true),

@@ -55,6 +55,7 @@ static const char HELP[] =
     "  man [n]     the manual, chapter n\n"
     "  tasks       the tasks and how far you got\n"
     "  task <n>    pick a task\n"
+    "  observe     see an example for the selected task\n"
     "  edit        open the program editor (ctrl-o saves, ctrl-x exits)\n"
     "  edit new    start with an empty editor\n"
     "  list        show the program\n"
@@ -63,11 +64,12 @@ static const char HELP[] =
     "  top         a link that puts this card on the board\n"
     "  try <ins>   run one instruction right now\n"
     "  regs        what try has left in the registers\n"
+    "  screen      print the current matrix in the terminal\n"
     "  cls         clear the terminal\n"
     "  up, down    earlier commands\n"
     "  ctrl-d      leave\n";
 
-static enum { M_LINE, M_EDIT, M_RUN, M_MORE } mode;
+static enum { M_LINE, M_EDIT, M_RUN, M_MORE, M_OBSERVE } mode;
 static saved st;
 static char line[SH_LINE];
 static int len, cur, line_full, last_cr;   /* cur: cursor position in line, 0..len */
@@ -82,6 +84,9 @@ static int edit_asking, edit_paste, edit_dot, program_in_memory;
 static int term_rows, term_cols, term_probe;
 static int reported_rows, reported_cols;
 static vm_t vm, bench, checker;
+static task_observer observer;
+static unsigned example_index;
+static int example_frame, example_button;
 static marquee mq;
 static int mq_on, mq_div;
 static uint16_t shown[VM_ROWS];
@@ -174,6 +179,17 @@ static void show(const uint16_t rows[VM_ROWS])
     }
 }
 
+static void cmd_screen(void)
+{
+    for (int y = 0; y < VM_ROWS; y++) {
+        char row[17];
+        for (int x = 0; x < 16; x++)
+            row[x] = (shown[y] & (0x8000u >> x)) ? '#' : '.';
+        row[16] = 0;
+        outf("%d %s\n", y, row);
+    }
+}
+
 static int save(void)
 {
     int result = hal_save(&st, sizeof st);
@@ -244,7 +260,14 @@ static void more_key(char c)
 /* ---- manual and tasks ------------------------------------------------------------- */
 
 static int chapter_open(int k) { return k < st.unlocked; }
-static int task_open(int t) { return t >= 1 && t <= N_TASKS && t <= CONTENT_N_TASKS && t <= st.unlocked; }
+static int task_exists(int t) { return t >= 1 && t <= N_TASKS && t <= CONTENT_N_TASKS; }
+
+static int task_chapter(int t)
+{
+    return TASKS[t - 1].kind == TASK_NOISE_FLOOR ? 4 : t - 1;
+}
+
+static int task_open(int t) { return task_exists(t) && chapter_open(task_chapter(t)); }
 
 /* the readable text of an unlocked chapter */
 static const uint8_t *chapter(int k, uint32_t *n)
@@ -300,10 +323,12 @@ static void cmd_man(const char *arg)
 
 static void cmd_tasks(void)
 {
-    for (int t = 1; t <= N_TASKS && t <= CONTENT_N_TASKS; t++) {
+    for (int t = 1; task_exists(t); t++) {
         const char *mark = t == st.task ? ">" : " ";
         if (!task_open(t))
             outf("%s %d  \xe2\x96\x92\xe2\x96\x92\xe2\x96\x92\xe2\x96\x92\n", mark, t);
+        else if (TASKS[t - 1].kind == TASK_NOISE_FLOOR)
+            outf("%s %d  %s  goal, %s\n", mark, t, TASKS[t - 1].name, st.solved >> t & 1 ? "qualified" : "open");
         else
             outf("%s %d  %-8s %s\n", mark, t, TASKS[t - 1].name, st.solved >> t & 1 ? "solved" : "open");
     }
@@ -311,14 +336,16 @@ static void cmd_tasks(void)
 
 static void select_task(int t)
 {
+    if (st.task != t)
+        example_index = 0;
     st.task = (uint8_t)t;
-    outf("selected task %d: %s (man %d)\n", t, TASKS[t - 1].name, t - 1);
+    outf("selected task %d: %s (man %d)\n", t, TASKS[t - 1].name, task_chapter(t));
 }
 
 static void cmd_task(const char *arg)
 {
     int t;
-    if (!parse_index(arg, &t) || t < 1 || t > N_TASKS || t > CONTENT_N_TASKS) {
+    if (!parse_index(arg, &t) || !task_exists(t)) {
         out("usage: task <n>, see tasks\n");
         return;
     }
@@ -330,22 +357,29 @@ static void cmd_task(const char *arg)
     save();
 }
 
-/* the board gets each task's best program so far: the shortest, then the fastest. A stand-in until goals
-   with points decide what best means (SPEC.md). The program in `checker` has just passed task t */
-static void keep_best(int t, uint32_t cycles)
+/* keep the highest goal quality, then the shortest and fastest program for a tie */
+static void keep_best(int t, const task_result *result)
 {
     static uint8_t code[VM_CODE_MAX];
     static vm_t kept;
     static task_result r;
+    int goal = TASKS[t - 1].kind == TASK_NOISE_FLOOR;
     int old_len;
     const uint8_t *old = token_find(st.sols, st.sols_len, t, &old_len);
     if (old && !vm_decode(&kept, old, old_len)) {
         task_run(&TASKS[t - 1], &kept, CONTENT_CHK[t - 1], NULL, &r);
-        if (r.passed == r.segs && (kept.n < checker.n || (kept.n == checker.n && r.cycles <= cycles)))
+        if (r.passed == r.segs && (r.quality > result->quality ||
+            (r.quality == result->quality &&
+             (kept.n < checker.n || (kept.n == checker.n && r.cycles <= result->cycles))))) {
+            if (goal)
+                outf("kept your best for the board: %u/%d packets\n", r.quality, TASK_NOISE_PACKETS);
             return;
+        }
     }
     if (token_put(st.sols, &st.sols_len, t, code, vm_encode(&checker, code)))
         out("no room left to keep this program for the board\n");
+    else if (goal)
+        out("best program updated for the board. use top to publish it.\n");
 }
 
 static void cmd_top(void)
@@ -388,23 +422,35 @@ static void cmd_check(void)
         return;
     }
     task_result res;
-    task_run(&TASKS[t - 1], &checker, CONTENT_CHK[t - 1], NULL, &res);
+    const task_def *task = &TASKS[t - 1];
+    task_run(task, &checker, CONTENT_CHK[t - 1], NULL, &res);
     if (res.err[0]) {
         outf("test %d of %d crashed: %s\n", res.passed + 1, res.segs, res.err);
         return;
     }
     if (res.passed < res.segs) {
         outf("test %d of %d: the outputs are wrong\n", res.passed + 1, res.segs);
-        outf("inputs: btn=%u lux=%u\n", checker.dev.btn, checker.dev.lux);
+        if (res.wrong_row >= 0)
+            outf("first different row: %d (top is 0)\n", res.wrong_row);
+        if (t <= 2)
+            outf("inputs: btn=%u lux=%u\n", checker.dev.btn, checker.dev.lux);
         if (t == 2)
             out("rows start at 0. row 4 is the middle row (fifth from the top).\n"
                 "try mov 4 row, then try mov 0x8000 pix to see it.\n");
+        if (t > 2)
+            out("compare your program with observe. see tasks and man for the output format.\n");
         return;
     }
     outf("task %d passed: %d instructions, %lu cycles in %lu ticks\n", t, checker.n, (unsigned long)res.cycles,
          (unsigned long)res.ticks);
     st.solved |= (uint16_t)(1u << t);
-    keep_best(t, res.cycles);
+    if (task->kind == TASK_NOISE_FLOOR)
+        outf("noise floor: %u/%d packets\n", res.quality, TASK_NOISE_PACKETS);
+    keep_best(t, &res);
+    if (task->kind == TASK_NOISE_FLOOR) {
+        save();
+        return;
+    }
     if (t < CONTENT_N_CHAPTERS && t < MAX_CHAPTERS && CONTENT_CHAPTERS[t].locked) {
         if (st.unlocked <= t) {
             task_key(res.hash, st.keys[t]);
@@ -417,6 +463,70 @@ static void cmd_check(void)
         out("that was the last chapter so far\n");
     }
     save();
+}
+
+static void show_example(void)
+{
+    vm_reset(&bench, 0x1234);
+    bench.state = VM_IDLE;
+    task_example(&TASKS[st.task - 1], example_index, &bench);
+    show(bench.dev.screen);
+    outf("example %u of %d\n", example_index + 1, TASK_EXAMPLES);
+}
+
+static void next_example(void)
+{
+    example_index = (example_index + 1) % TASK_EXAMPLES;
+    show_example();
+}
+
+static void cmd_observe(const char *arg)
+{
+    if (!task_open(st.task)) {
+        out("no task picked, see tasks\n");
+        return;
+    }
+    const task_def *task = &TASKS[st.task - 1];
+    example_frame = task->kind == TASK_FIELD_SYNC || task->kind == TASK_MISSING_LINE;
+    if (example_frame) {
+        int index;
+        if (*arg && (!parse_index(arg, &index) || index < 1 || index > TASK_EXAMPLES)) {
+            outf("usage: observe [1..%d]\n", TASK_EXAMPLES);
+            return;
+        }
+        if (*arg)
+            example_index = (unsigned)(index - 1);
+        example_button = hal_button() != 0;
+        out("press the card button or n for the next example. ctrl-c returns to try.\n");
+        show_example();
+    } else if (task->kind == TASK_SHADOW_MODEM || task->kind == TASK_NOISE_FLOOR) {
+        if (*arg) {
+            out("usage: observe\n");
+            return;
+        }
+        memset(&observer, 0, sizeof observer);
+        out("start in light. shade the sensor, then let light back in. ctrl-c stops.\n");
+        task_observe(&observer, hal_lux(), bench.dev.screen);
+        show(bench.dev.screen);
+    } else {
+        outf("see man %d for this task.\n", task_chapter(st.task));
+        return;
+    }
+    mq_on = 0;
+    mode = M_OBSERVE;
+}
+
+static void observe_tick(void)
+{
+    if (example_frame) {
+        int button = hal_button() != 0;
+        if (button && !example_button)
+            next_example();
+        example_button = button;
+    } else {
+        task_observe(&observer, hal_lux(), bench.dev.screen);
+        show(bench.dev.screen);
+    }
 }
 
 /* ---- programs ---------------------------------------------------------------- */
@@ -745,6 +855,8 @@ static void cmd_run(void)
         return;
     }
     vm_reset(&vm, (uint16_t)(hal_lux() * 31 + 7));
+    if (task_open(st.task))
+        task_prepare(&TASKS[st.task - 1], example_index, &vm);
     mq_on = 0;
     mode = M_RUN;
     out("running, ctrl-c stops\n");
@@ -822,6 +934,8 @@ static void command(char *l)
         cmd_tasks();
     else if (!strcmp(l, "task"))
         cmd_task(arg);
+    else if (!strcmp(l, "observe"))
+        cmd_observe(arg);
     else if (!strcmp(l, "edit"))
         cmd_edit(arg);
     else if (!strcmp(l, "list"))
@@ -840,6 +954,8 @@ static void command(char *l)
         cmd_try(arg);
     else if (!strcmp(l, "regs"))
         print_regs(&bench);
+    else if (!strcmp(l, "screen"))
+        cmd_screen();
     else if (!strcmp(l, "cls"))
         out("\x1b[2J\x1b[H");
     else if (!strcmp(l, "objdump") || !strcmp(l, "gdb") || !strcmp(l, "hexdump") || !strcmp(l, "sudo"))
@@ -991,6 +1107,14 @@ static void key(char k, int arg)
 
 static void key_input(char c)
 {
+    if (mode == M_OBSERVE) {
+        if (c == 3 || c == 'q') {
+            mode = M_LINE;
+            prompt();
+        } else if (c == 'n' && example_frame)
+            next_example();
+        return;
+    }
     if (mode == M_RUN) {
         if (c == 3)
             run_end("stopped");
@@ -1101,6 +1225,10 @@ void shell_tick(void)
 {
     if (mode == M_EDIT && edit_redraw)
         edit_draw();
+    if (mode == M_OBSERVE) {
+        observe_tick();
+        return;
+    }
     if (mode == M_RUN) {
         vm.dev.btn = hal_button() != 0;
         vm.dev.lux = hal_lux();
@@ -1239,6 +1367,8 @@ void shell_connect(void)
     out(BANNER);
     if (mode == M_RUN) {
         out("a program is running, ctrl-c stops\n");
+    } else if (mode == M_OBSERVE) {
+        out("observing, ctrl-c stops\n");
     } else if (mode == M_MORE) {
         out(MORE);
     } else {
@@ -1254,7 +1384,7 @@ void shell_disconnect(void)
     edit_dot = edit_paste = term_probe = reported_rows = reported_cols = 0;
 }
 
-int shell_running(void) { return mode == M_RUN; }
+int shell_running(void) { return mode == M_RUN || mode == M_OBSERVE; }
 int shell_editing(void) { return mode == M_EDIT; }
 
 void shell_resize(int rows, int cols)
@@ -1295,11 +1425,26 @@ void shell_init(void)
     }
     if (st.sols_len > TOKEN_SOLS_MAX || !token_entries_ok(st.sols, st.sols_len))
         st.sols_len = 0;
+    /* level used to be the last gate, so old saves may have its solution but no chapter key */
+    if (st.unlocked == 2 && (st.solved & (1u << 2)) && CONTENT_N_CHAPTERS > 2) {
+        int code_len;
+        const uint8_t *code = token_find(st.sols, st.sols_len, 2, &code_len);
+        if (code && !vm_decode(&checker, code, code_len)) {
+            task_result result;
+            task_run(&TASKS[1], &checker, CONTENT_CHK[1], NULL, &result);
+            if (result.passed == result.segs) {
+                task_key(result.hash, st.keys[2]);
+                st.unlocked = 3;
+                st.task = 3;
+            }
+        }
+    }
     st.prog[VM_SRC_MAX - 1] = 0;
     if (!task_open(st.task))
         st.task = 1;
     vm_reset(&bench, 0x1234);
     bench.state = VM_IDLE;
+    example_index = 0;
     program_in_memory = 0;
     mode = M_LINE;
     out(BANNER);

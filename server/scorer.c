@@ -7,7 +7,7 @@
 #define EXPORT(name) __attribute__((export_name(name)))
 
 typedef struct {
-    uint32_t score, solved, instructions, cycles, ticks;
+    uint32_t quality_plus_one, solved, instructions, cycles, ticks;
 } score_result;
 
 static uint8_t input[TOKEN_SOLS_MAX];
@@ -39,16 +39,18 @@ EXPORT("score_verify") const score_result *score_verify(uint32_t len)
             return NULL;
         pos += code_len;
 
+        const task_def *def = &TASKS[task - 1];
         task_result checked;
-        task_run(&TASKS[task - 1], &vm, CONTENT_CHK[task - 1], NULL, &checked);
+        task_run(def, &vm, CONTENT_CHK[task - 1], NULL, &checked);
         if (checked.err[0] || checked.passed != checked.segs)
             return NULL;
+        if (def->kind == TASK_NOISE_FLOOR)
+            totals.quality_plus_one = (uint32_t)checked.quality + 1;
         totals.solved++;
         totals.instructions += vm.n;
         totals.cycles += checked.cycles;
         totals.ticks += checked.ticks;
     }
-    /* The current catalog contains only manual gates. Only goals award points. */
     result = totals;
     return &result;
 }

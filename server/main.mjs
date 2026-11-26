@@ -58,11 +58,12 @@ function readStandings(board, query) {
   }
   const size = Number(limit);
   const start = Number(offset);
-  const entries = board.entries(size + 1, start);
-  if (entries.length <= size) return { entries };
+  const { entries, record } = board.standings(size + 1, start);
+  const goal = { task: 6, name: "noise floor", maxQuality: 128, record };
+  if (entries.length <= size) return { entries, goal };
   entries.pop();
   const nextOffset = start + size;
-  return nextOffset <= maxBoardOffset ? { entries, nextOffset } : { entries };
+  return nextOffset <= maxBoardOffset ? { entries, goal, nextOffset } : { entries, goal };
 }
 
 async function readSubmission(request) {

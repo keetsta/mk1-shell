@@ -19,6 +19,7 @@ static int fails, checks;
 static char outbuf[1 << 16];
 static size_t outlen;
 static uint16_t matrix[9];
+static uint16_t fake_lux = 512;
 static int matrix_lit, fake_btn, fake_rows, exited;
 
 /* the terminal line the cursor is on, as a person sees it: \r \b \n, CSI K, D, C, J, H */
@@ -88,7 +89,7 @@ void hal_matrix(const uint16_t r[9])
             matrix_lit = 1;
 }
 int hal_button(void) { return fake_btn; }
-uint16_t hal_lux(void) { return 512; }
+uint16_t hal_lux(void) { return fake_lux; }
 int hal_rows(void) { return fake_rows; }
 void hal_exit(void) { exited = 1; }
 /* the state as the card keeps it: one record, loaded only at its exact size */
@@ -434,6 +435,141 @@ static int kept(const token_parts *tk, int t, int n)
     return res.passed == res.segs;
 }
 
+static void test_optical_observe(void)
+{
+    type("observe\r");
+    CHECK(shell_running() && matrix[0] == 1 && matrix[1] == 0);
+    /* One step on the POSIX/browser light control creates a visible shadow. */
+    fake_lux -= 64;
+    for (int i = 0; i < 12; i++)
+        shell_tick();
+    CHECK(matrix[0] == 1 && matrix[1] != 0);
+    fake_lux += 64;
+    shell_tick();
+    CHECK(matrix[0] == 2 && matrix[1] == 0);
+    fake_lux -= 64;
+    for (int i = 0; i < 28; i++)
+        shell_tick();
+    fake_lux += 64;
+    shell_tick();
+    CHECK(matrix[0] == 5 && matrix[1] == 0);
+    type("\x03");
+    CHECK(!shell_running() && said("mk1> "));
+    type("screen\r");
+    CHECK(said("0 .............#.#") && said("1 ................"));
+}
+
+static void test_new_board(const char *dir, const uint8_t key[32])
+{
+    const task_def *field = &TASKS[2], *goal = &TASKS[5];
+    vm_t fixture = {0};
+    char line[96], path[512], err[96];
+
+    type("task 6\r");
+    CHECK(said("task 6 is locked"));
+    type("task 3\r");
+    CHECK(said("selected task 3:"));
+
+    fake_btn = 0;
+    type("observe 2\r");
+    CHECK(said("example 2 of 3") && task_example(field, 1, &fixture));
+    CHECK(!memcmp(matrix, fixture.dev.screen, sizeof matrix));
+    fake_btn = 1;
+    type("");
+    shell_tick();
+    CHECK(said("example 3 of 3") && task_example(field, 2, &fixture));
+    CHECK(!memcmp(matrix, fixture.dev.screen, sizeof matrix));
+    type("");
+    shell_tick();
+    CHECK(!said("example 1 of 3"));
+    fake_btn = 0;
+    shell_tick();
+    type("\x03");
+    CHECK(said("mk1> "));
+
+    type("try mov ed a\r");
+    snprintf(line, sizeof line, "a=%u ", (unsigned)fixture.dev.ee[0]);
+    CHECK(said(line) && said("ea=1"));
+    enter_prog("mov ed pix\nhalt\n");
+    type("run\r");
+    shell_tick();
+    CHECK(matrix[0] == fixture.dev.ee[0] && !shell_running());
+    type("check\r");
+    CHECK(said("the outputs are wrong") && said("first different row: 0 (top is 0)"));
+
+    for (int t = 3; t <= 5; t++) {
+        snprintf(path, sizeof path, "%s/sol%d.asm", dir, t);
+        char *src = slurp(path);
+        if (!src)
+            return;
+        snprintf(line, sizeof line, "task %d\r", t);
+        type(line);
+        if (t == 4)
+            test_optical_observe();
+        enter_prog(src);
+        type("check\r");
+        snprintf(line, sizeof line, "task %d passed", t);
+        CHECK(said(line));
+        if (t == 4) {
+            type("tasks\r");
+            CHECK(said("> 5  missing line open") && said("6  noise floor  goal, open"));
+            type("task 6\r");
+            CHECK(said("selected task 6:") && said("(man 4)"));
+        }
+    }
+
+    type("task 6\r");
+    CHECK(said("selected task 6:") && said("(man 4)"));
+    task_result baseline;
+    snprintf(path, sizeof path, "%s/sol4.asm", dir);
+    char *src = slurp(path);
+    if (!src)
+        return;
+    CHECK(vm_assemble(&vm, src, err, sizeof err) == 0);
+    int baseline_size = vm.n;
+    task_run(goal, &vm, CONTENT_CHK[5], NULL, &baseline);
+    CHECK(!baseline.err[0] && baseline.passed == baseline.segs);
+    enter_prog(src);
+    type("check\r");
+    snprintf(line, sizeof line, "noise floor: %u/%d packets", (unsigned)baseline.quality, TASK_NOISE_PACKETS);
+    CHECK(said(line));
+
+    snprintf(path, sizeof path, "%s/sol6.asm", dir);
+    src = slurp(path);
+    if (!src)
+        return;
+    CHECK(vm_assemble(&vm, src, err, sizeof err) == 0);
+    CHECK(vm.n > baseline_size);
+    task_result best;
+    task_run(goal, &vm, CONTENT_CHK[5], NULL, &best);
+    CHECK(!best.err[0] && best.passed == best.segs && best.quality > baseline.quality);
+    uint8_t code[VM_CODE_MAX];
+    int n = vm_encode(&vm, code);
+    enter_prog(src);
+    type("check\r");
+    snprintf(line, sizeof line, "noise floor: %u/%d packets", (unsigned)best.quality, TASK_NOISE_PACKETS);
+    CHECK(said(line));
+
+    /* Checking the baseline again may update the working program, while top keeps the reliable decoder. */
+    snprintf(path, sizeof path, "%s/sol4.asm", dir);
+    src = slurp(path);
+    if (!src)
+        return;
+    enter_prog(src);
+    type("check\r");
+    shell_init();
+    type("top\r");
+    uint8_t bin[TOKEN_BIN_MAX];
+    token_parts tk;
+    int read = top_token(bin, &tk);
+    CHECK(!read && !token_check(&tk, key));
+    if (!read) {
+        int len;
+        const uint8_t *retained = token_find(tk.sols, tk.sols_len, 6, &len);
+        CHECK(retained && len == n && !memcmp(retained, code, (size_t)n));
+    }
+}
+
 static void test_board(const char *dir)
 {
     static uint8_t bin[TOKEN_BIN_MAX];
@@ -553,6 +689,103 @@ static void test_board(const char *dir)
     type("top\r");
     CHECK(!top_token(bin, &tk) && !token_check(&tk, key) && kept(&tk, 1, 11));
     CHECK(store_n > sizeof old && store_n <= HAL_STATE_MAX);
+    if (sol2 && N_TASKS >= 6 && CONTENT_N_TASKS >= 6) {
+        /* Before chapter 2 existed, a solved level kept its program without its chapter key. */
+        old.magic = 0x4d4b3103u;
+        old.solved |= 1u << 2;
+        memcpy(store, &old, sizeof old);
+        shell_init();
+        type("tasks\r");
+        CHECK(said("2  level    solved") && said("> 3  field sync open"));
+        type("man 2\r");
+        CHECK(said("chapter 2."));
+        test_new_board(dir, key);
+    }
+}
+
+static uint16_t example_row(const uint8_t *bytes)
+{
+    return (uint16_t)((uint16_t)bytes[0] << 8 | bytes[1]);
+}
+
+static void test_task_examples(void)
+{
+    static const int ids[] = {3, 5};
+    static const enum task_kind kinds[] = {TASK_FIELD_SYNC, TASK_MISSING_LINE};
+    char src[512], err[96];
+    vm_t trial = {0};
+
+    CHECK(N_TASKS >= 6 && CONTENT_N_TASKS >= 6);
+    if (N_TASKS < 6 || CONTENT_N_TASKS < 6)
+        return;
+
+    for (size_t i = 0; i < sizeof ids / sizeof ids[0]; i++) {
+        int id = ids[i];
+        const task_def *task = &TASKS[id - 1];
+        uint16_t fixed[VM_ROWS];
+        uint8_t first[sizeof trial.dev.ee];
+        CHECK(task->kind == kinds[i] && task_example(task, 0, &trial));
+        memcpy(first, trial.dev.ee, sizeof first);
+        const uint8_t *source = first + (id == 5);
+        for (int r = 0; r < VM_ROWS; r++) {
+            fixed[r] = example_row(source + 2 * r);
+            CHECK(trial.dev.screen[r] == fixed[r]);
+        }
+        if (id == 3) {
+            for (int r = 1; r < VM_ROWS; r += 2) {
+                uint16_t reversed = 0;
+                for (int bit = 0; bit < 16; bit++)
+                    reversed |= (uint16_t)((fixed[r] >> bit & 1u) << (15 - bit));
+                fixed[r] = reversed;
+            }
+        } else {
+            unsigned missing = first[0];
+            CHECK(missing < VM_ROWS - 1);
+            if (missing >= VM_ROWS - 1)
+                continue;
+            CHECK(fixed[missing] == 0);
+            for (int r = 0; r < VM_ROWS; r++) {
+                if (r != (int)missing)
+                    fixed[missing] ^= fixed[r];
+            }
+            fixed[VM_ROWS - 1] = 0;
+            CHECK(fixed[missing] != 0);
+        }
+
+        CHECK(task_example(task, 1, &trial));
+        CHECK(memcmp(first, trial.dev.ee, sizeof first) != 0);
+        uint16_t shown_example[VM_ROWS];
+        memcpy(shown_example, trial.dev.screen, sizeof shown_example);
+        trial.dev.ea = 0xff;
+        CHECK(task_prepare(task, 0, &trial));
+        CHECK(trial.dev.ea == 0 && !memcmp(first, trial.dev.ee, sizeof first));
+        CHECK(!memcmp(shown_example, trial.dev.screen, sizeof shown_example));
+
+        /* An exact copy of the first repaired example does not repair other frames. */
+        size_t len = 0;
+        for (int r = 0; r < VM_ROWS; r++)
+            len += (size_t)snprintf(src + len, sizeof src - len, "mov %d row\nmov 0x%04x pix\n", r,
+                                    (unsigned)fixed[r]);
+        CHECK(vm_assemble(&trial, src, err, sizeof err) == 0);
+        vm_reset(&trial, 1);
+        vm_tick(&trial);
+        CHECK(!memcmp(fixed, trial.dev.screen, sizeof fixed));
+        task_result rejected;
+        task_run(task, &trial, CONTENT_CHK[id - 1], NULL, &rejected);
+        CHECK(!rejected.err[0] && rejected.passed < rejected.segs);
+    }
+
+    CHECK(TASKS[3].kind == TASK_SHADOW_MODEM && TASKS[5].kind == TASK_NOISE_FLOOR);
+    /* Neither holding a fixed symbol nor faulting is a qualifying optical decoder. */
+    for (int id = 4; id <= 6; id += 2) {
+        task_result rejected;
+        CHECK(vm_assemble(&trial, "mov 1 pix\nhalt\n", err, sizeof err) == 0);
+        task_run(&TASKS[id - 1], &trial, CONTENT_CHK[id - 1], NULL, &rejected);
+        CHECK(!rejected.err[0] && rejected.passed < rejected.segs && rejected.quality == 0);
+        CHECK(vm_assemble(&trial, "top: jmp top\n", err, sizeof err) == 0);
+        task_run(&TASKS[id - 1], &trial, CONTENT_CHK[id - 1], NULL, &rejected);
+        CHECK(strstr(rejected.err, "watchdog") != NULL && rejected.passed == 0 && rejected.quality == 0);
+    }
 }
 
 int main(int argc, char **argv)
@@ -637,13 +870,24 @@ int main(int argc, char **argv)
         CHECK(vm_assemble(&vm, src, err, sizeof err) == 0);
         task_run(&TASKS[t - 1], &vm, CONTENT_CHK[t - 1], NULL, &res);
         CHECK(res.passed == res.segs && !res.err[0]);
-        if (t < CONTENT_N_CHAPTERS) {
+        if (TASKS[t - 1].kind == TASK_NOISE_FLOOR) {
+            uint8_t code[VM_CODE_MAX];
+            vm_t decoded = {0};
+            task_result repeat;
+            int len = vm_encode(&vm, code);
+            CHECK(res.quality > 0 && res.quality <= TASK_NOISE_PACKETS);
+            CHECK(!vm_decode(&decoded, code, len));
+            task_run(&TASKS[t - 1], &decoded, CONTENT_CHK[t - 1], NULL, &repeat);
+            CHECK(!repeat.err[0] && repeat.passed == repeat.segs && repeat.quality == res.quality);
+            CHECK(repeat.cycles == res.cycles && repeat.ticks == res.ticks);
+        } else if (t < CONTENT_N_CHAPTERS) {
             uint8_t key[32], txt[64];
             char want[32];
+            size_t len = CONTENT_CHAPTERS[t].len < sizeof txt ? CONTENT_CHAPTERS[t].len : sizeof txt;
             task_key(res.hash, key);
-            chapter_crypt(key, CONTENT_CHAPTERS[t].data, txt, sizeof txt);
+            chapter_crypt(key, CONTENT_CHAPTERS[t].data, txt, (uint32_t)len);
             snprintf(want, sizeof want, "chapter %d.", t);
-            CHECK(!memcmp(txt, want, strlen(want)));
+            CHECK(len >= strlen(want) && !memcmp(txt, want, strlen(want)));
         }
     }
     /* a program that gets the button backwards fails, and says which test */
@@ -697,31 +941,26 @@ int main(int argc, char **argv)
     type("check\r");
     CHECK(said("no program yet"));
 
-    char *sol1 = NULL;
-    snprintf(path, sizeof path, "%s/sol1.asm", dir);
-    if ((sol1 = slurp(path))) {
-        enter_prog(sol1);
-        CHECK(said("saved, 11 instructions"));
-        type("list\r");
-        CHECK(said(" 1| top:  mov 0 a") && said("11|       jmp top"));
-        type("run\r");
-        CHECK(shell_running());
-        fake_btn = 1;
-        for (int i = 0; i < 3; i++)
-            shell_tick();
-        CHECK(matrix[0] == 0xffff && matrix[8] == 0xffff);
-        type("\x03");
-        CHECK(!shell_running() && said("stopped after 3 ticks"));
-        type("check\r");
-        CHECK(said("task 1 passed") && said("chapter 1 unlocked"));
-        type("man 1\r");
-        CHECK(said("chapter 1. bits") && said("task 2. level"));
-        type("tasks\r");
-        CHECK(said("1  lamp     solved") && said("> 2  level    open"));
-        type("check\r");
-        CHECK(said("test 1 of 10: the outputs are wrong") || said("test 2 of 10: the outputs are wrong") ||
-              said("of 10: the outputs are wrong"));
-    }
+    enter_prog(LAMP);
+    CHECK(said("saved, 11 instructions"));
+    type("list\r");
+    CHECK(said(" 1| top: mov 0 a") && said("11| jmp top"));
+    type("run\r");
+    CHECK(shell_running());
+    fake_btn = 1;
+    for (int i = 0; i < 3; i++)
+        shell_tick();
+    CHECK(matrix[0] == 0xffff && matrix[8] == 0xffff);
+    type("\x03");
+    CHECK(!shell_running() && said("stopped after 3 ticks"));
+    type("check\r");
+    CHECK(said("task 1 passed") && said("chapter 1 unlocked"));
+    type("man 1\r");
+    CHECK(said("chapter 1. bits") && said("task 2. level"));
+    type("tasks\r");
+    CHECK(said("1  lamp     solved") && said("> 2  level    open"));
+    type("check\r");
+    CHECK(said("of 10: the outputs are wrong"));
     type("edit new\rmov 1 a\r\x03n");
     CHECK(said("mk1> "));
     type("edit new\rdiv 0 a\r.\rrun\r");
@@ -983,6 +1222,7 @@ int main(int argc, char **argv)
     test_token();
     test_edit();
     test_board(dir);
+    test_task_examples();
 
     printf("%d checks, %d failed\n", checks, fails);
     return fails != 0;
