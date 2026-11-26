@@ -330,10 +330,79 @@ static void test_token(void)
 
 static void enter_prog(const char *src)
 {
-    type("edit\r");
-    for (const char *p = src; *p; p++)
-        shell_input(*p == '\n' ? '\r' : *p);
+    type("edit new\r");
+    size_t n = strlen(src);
+    for (size_t i = 0; i < n; i++)
+        shell_input(src[i]);
+    if (n && src[n - 1] != '\n')
+        shell_input('\n');
     type(".\r");
+}
+
+static void test_edit(void)
+{
+    shell_resize(24, 80);
+    enter_prog("mov 1 a\nadd 2 a\nhalt\n");
+    type("edit\r");
+    CHECK(said("mov 1 a") && said("add 2 a") && said("halt"));
+
+    /* reopen the first line, replace a digit, then split and rejoin the next line */
+    type("\x1b[A\x1b[A\x1b[A\x1b[H\x1b[C\x1b[C\x1b[C\x1b[C\x1b[3~5");
+    type("\x1bOB\x1b[H\r\n\x7f\t");
+    type("\x0f");
+    shell_tick();
+    CHECK(said("saved") && !said("mk1> "));
+    type("\x18");
+    CHECK(said("mk1> "));
+    type("list\r");
+    CHECK(said(" 1| mov 5 a\r\n 2|  ") && said("add 2 a\r\n 3| halt") && !said("\t"));
+    shell_init();
+    type("list\r");
+    CHECK(said(" 1| mov 5 a") && said(" 3| halt"));
+
+    /* discard a replacement, then cancel the exit prompt and keep working across a reconnect */
+    type("edit new\rnop\x18");
+    shell_tick();
+    CHECK(said("y/n"));
+    type("nlist\r");
+    CHECK(said(" 1| mov 5 a") && !said(" 1| nop"));
+    type("edit new\rmov 9 a\x18\x03");
+    shell_disconnect();
+    type("");
+    shell_connect();
+    CHECK(said("mov 9 a") && !said("y/n"));
+    type("\x1b[F\rhalt\x18ylist\r");
+    CHECK(said(" 1| mov 9 a\r\n 2| halt"));
+
+    /* a pasted dot is source text, even though a dot typed on its own can still save and exit */
+    type("edit new\r\x1b[200~mov 1 a\r\n.\r\nhalt\x1b[201~\x13");
+    shell_tick();
+    CHECK(said("line 2: unknown instruction '.'") && !said("mk1> "));
+    type("\x18list\r");
+    CHECK(said(" 1| mov 1 a\r\n 2| .\r\n 3| halt"));
+
+    type("edit new\r\x1b[200~.\x1b[201~\r\x0f");
+    shell_tick();
+    CHECK(said("line 1: unknown instruction '.'") && !said("mk1> "));
+    type("\x18");
+
+    fail_save = 1;
+    type("edit new\rnop\x0f");
+    shell_tick();
+    CHECK(said("program in memory"));
+    type("\x18");
+    CHECK(said("only in this session") && said("mk1> "));
+    fail_save = 0;
+
+    type("edit new\r\x1b[200~");
+    for (int i = 0; i < VM_SRC_MAX; i++)
+        shell_input(' ');
+    type("\x1b[201~");
+    shell_tick();
+    CHECK(said("program text is full"));
+    type("\x18n");
+    CHECK(said("edit cancelled"));
+    shell_resize(0, 0);
 }
 
 /* the link top printed, its token into bin */
@@ -405,10 +474,19 @@ static void test_board(const char *dir)
     enter_prog(lamp_nop);
     type("check\r");
     CHECK(said("task 1 passed: 12 instructions"));
+    CHECK(said("selected task 2: level (man 1)"));
     type("top\r");
     CHECK(!top_token(bin, &tk) && !token_check(&tk, key) && kept(&tk, 1, 12));
     int len;
     CHECK(!token_find(tk.sols, tk.sols_len, 2, &len));
+
+    enter_prog("mov 3 row\nmov 0x8000 pix\nhalt\n");
+    type("check 2\r");
+    CHECK(said("usage: check (use task <n> to select a task)") && !said("the outputs are wrong"));
+    type("check\r");
+    CHECK(said("the outputs are wrong") && said("inputs: btn=0 lux="));
+    CHECK(said("row 4 is the middle row (fifth from the top)") && said("try mov 4 row"));
+
     type("task 1\r");
     enter_prog(LAMP);
     type("check\r");
@@ -499,8 +577,17 @@ int main(int argc, char **argv)
     CHECK(asm_err("mov 1 2", "can't write"));
     CHECK(asm_err("jmp nowhere", "no label"));
     CHECK(asm_err("x: nop\nx: nop", "twice"));
-    CHECK(asm_err("mov 70000 a", "what is"));
+    CHECK(asm_err("mov 70000 a", "number out of range (-32768 to 65535)"));
+    CHECK(asm_err("mov -32769 a", "number out of range (-32768 to 65535)"));
+    CHECK(asm_err("mov 0b102 a", "invalid number"));
     CHECK(asm_err("add 1", "takes 2 operands"));
+    {
+        char src[256];
+        snprintf(src, sizeof src, "nop%125sbad", "");
+        CHECK(asm_err(src, "line 1: line too long"));
+        snprintf(src, sizeof src, "nop%125s# a long comment", "");
+        CHECK(run_src(src, 1) == 0 && vm.n == 1);
+    }
     {
         char big[512] = "";
         for (int i = 0; i < VM_MAX_INSTR + 1; i++)
@@ -584,10 +671,17 @@ int main(int argc, char **argv)
     CHECK(said("task 2 is locked"));
     type("try mov 0b1010 pix\r\n");
     CHECK(said("pix=0x000a") && matrix[0] == 10);
+    type("try mov 9 row\r");
+    CHECK(said("row 9 is outside 0..8 (0 is the top)") && said("pix has no effect there"));
+    type("try mov 0 row\r");
     type("try add 5 a\r");
     type("try add 5 a\r");
     CHECK(said("a=10"));
     type("try jmp x\r");
+    CHECK(said("only make sense inside a program"));
+    type("try wait,1\r");
+    CHECK(said("only make sense inside a program"));
+    type("try jmp,loop\r");
     CHECK(said("only make sense inside a program"));
     type("try mov 1 btn\r");
     CHECK(said("read-only"));
@@ -606,10 +700,7 @@ int main(int argc, char **argv)
     char *sol1 = NULL;
     snprintf(path, sizeof path, "%s/sol1.asm", dir);
     if ((sol1 = slurp(path))) {
-        type("edit\r");
-        for (char *p = sol1; *p; p++)
-            shell_input(*p == '\n' ? '\r' : *p);
-        type(".\r");
+        enter_prog(sol1);
         CHECK(said("saved, 11 instructions"));
         type("list\r");
         CHECK(said(" 1| top:  mov 0 a") && said("11|       jmp top"));
@@ -631,12 +722,12 @@ int main(int argc, char **argv)
         CHECK(said("test 1 of 10: the outputs are wrong") || said("test 2 of 10: the outputs are wrong") ||
               said("of 10: the outputs are wrong"));
     }
-    type("edit\rmov 1 a\r\x03");
-    CHECK(said("edit cancelled"));
-    type("edit\rdiv 0 a\r.\rrun\r");
+    type("edit new\rmov 1 a\r\x03n");
+    CHECK(said("mk1> "));
+    type("edit new\rdiv 0 a\r.\rrun\r");
     shell_tick();
     CHECK(said("line 1: division by zero") && said("crashed after 1 tick") && !shell_running());
-    type("edit\rfoo\r.\r");
+    type("edit new\rfoo\r.\r");
     CHECK(said("saved, but: line 1: unknown instruction 'foo'"));
 
     /* cls replaced clear */
@@ -670,14 +761,14 @@ int main(int argc, char **argv)
     type("tasks\rtasks\r\x1b[A\x1b[A\r");
     CHECK(said("man [n]"));
     /* program lines typed in edit stay out of the history */
-    type("edit\rmov 1 a\r.\r");
+    enter_prog("mov 1 a\n");
     type("\x1b[A");
-    CHECK(!strcmp(shown(), "mk1> edit"));
+    CHECK(!strcmp(shown(), "mk1> edit new"));
     /* ^C drops the line and starts again from the newest command */
     type("\x1b[A");
     CHECK(!strcmp(shown(), "mk1> help"));
     type("\x03\x1b[A");
-    CHECK(said("^C") && !strcmp(shown(), "mk1> edit"));
+    CHECK(said("^C") && !strcmp(shown(), "mk1> edit new"));
     type("\x03");
     /* older commands than HIST_N fall off */
     for (int i = 0; i < 20; i++) {
@@ -724,8 +815,8 @@ int main(int argc, char **argv)
     CHECK(said("man [n]") && !said("no such command"));
     type("he\xd0\xb7lp\r");                  /* a stray letter in the middle is dropped too */
     CHECK(said("man [n]"));
-    type("edit\r\xd0\xb7mov 1 a\r.\r");      /* and in edit */
-    CHECK(said("saved, 1 instruction"));
+    type("edit new\r\xd0\xb7mov 1 a\r.\r");  /* and in edit */
+    CHECK(said("\a") && said("saved, 1 instruction"));
 
     /* editing in the middle of the line */
     type("hlp\x1b[D\x1b[D");
@@ -758,17 +849,6 @@ int main(int argc, char **argv)
     CHECK(said("hp^C"));
     type("help\x1b[D\x1b[D\r");              /* enter in the middle runs the whole line */
     CHECK(said("man [n]"));
-    /* in edit the arrows move the cursor too; up and down do nothing there */
-    type("edit\r");
-    type("mv 1 a\x1b[H\x1b[Co");
-    CHECK(!strcmp(shown(), " 1| mov 1 a") && vcol == 6);
-    type("\x1b[A");
-    CHECK(!outbuf[0]);
-    type("\r.\r");
-    CHECK(said("saved, 1 instruction"));
-    type("list\r");
-    CHECK(said(" 1| mov 1 a"));
-
     /* ctrl-d leaves at an empty prompt, does nothing on a typed line */
     type("\x04");
     CHECK(exited && said("bye"));
@@ -844,7 +924,7 @@ int main(int argc, char **argv)
     type("he\x1b]7777;hello\alp\r");
     CHECK(said("man [n]") && said("\x1b]7777;mk1;2;" MK1_VERSION "\a"));
     /* in a running program too, and ESC \ ends one as well as BEL */
-    type("edit\rtop: mov clk a\rwait 1\rjmp top\r.\rrun\r");
+    type("edit new\rtop: mov clk a\rwait 1\rjmp top\r.\rrun\r");
     CHECK(shell_running());
     type("\x1b]7777;hello\x1b\\");
     CHECK(shell_running() && said("\x1b]7777;mk1;2;" MK1_VERSION "\a"));
@@ -869,7 +949,7 @@ int main(int argc, char **argv)
     shell_disconnect();
 
     fail_save = 1;
-    type("edit\rnop\r.\r");
+    type("edit new\rnop\r.\r");
     CHECK(said("could not save progress") && said("program in memory, 1 instruction") && !said("saved,"));
     type("list\r");
     CHECK(said(" 1| nop"));
@@ -889,7 +969,7 @@ int main(int argc, char **argv)
     CHECK(!strcmp(shown(), "mk1> tasks"));
     type("\r");
     CHECK(said("1  lamp"));
-    type("edit\rtop: wait 1\rjmp top\r.\rrun\r");
+    type("edit new\rtop: wait 1\rjmp top\r.\rrun\r");
     CHECK(shell_running());
     outlen = 0;
     outbuf[0] = 0;
@@ -901,6 +981,7 @@ int main(int argc, char **argv)
     test_hmac();
     test_code();
     test_token();
+    test_edit();
     test_board(dir);
 
     printf("%d checks, %d failed\n", checks, fails);

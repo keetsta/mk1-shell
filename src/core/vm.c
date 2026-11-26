@@ -18,6 +18,7 @@ static const uint8_t PORT_WRITABLE[P__N] = {0, 0, 0, 0, 1, 1, 1, 1};
 
 #define MAX_TOK 4
 #define LABEL_LEN 16
+#define ASM_LINE_MAX 127
 
 typedef struct { char name[LABEL_LEN]; uint8_t at; } label;
 
@@ -51,20 +52,23 @@ static int find_op(const char *s)
     return -1;
 }
 
-static int parse_num(const char *s, long *out)
+typedef enum { NUM_OK, NUM_NOT_LITERAL, NUM_INVALID, NUM_RANGE } num_result;
+
+static num_result parse_num(const char *s, uint16_t *out)
 {
-    int neg = 0, base = 10;
+    int neg = *s == '-', base = 10;
+    long limit = neg ? 32768 : 65535;
     long v = 0;
-    if (*s == '-') {
-        neg = 1;
+    if (!isdigit((unsigned char)*s) && !neg && *s != '+')
+        return NUM_NOT_LITERAL;
+    if (neg)
         s++;
-    }
     if (s[0] == '0' && (s[1] == 'x' || s[1] == 'b')) {
         base = s[1] == 'x' ? 16 : 2;
         s += 2;
     }
     if (!*s)
-        return 0;
+        return NUM_INVALID;
     for (; *s; s++) {
         int d;
         if (isdigit((unsigned char)*s))
@@ -72,30 +76,38 @@ static int parse_num(const char *s, long *out)
         else if (*s >= 'a' && *s <= 'f')
             d = *s - 'a' + 10;
         else
-            return 0;
+            return NUM_INVALID;
         if (d >= base)
-            return 0;
-        v = v * base + d;
-        if (v > 65535)
-            return 0;
+            return NUM_INVALID;
+        if (v <= limit)
+            v = v * base + d;
     }
-    if (neg && v > 32768)
-        return 0;
-    *out = neg ? -v : v;
-    return 1;
+    if (v > limit)
+        return NUM_RANGE;
+    *out = (uint16_t)(neg ? -v : v);
+    return NUM_OK;
 }
 
 /* lowercases, drops the comment, splits off "label:" and the operands */
-static int split(const char *src, size_t n, char *buf, size_t buflen, char **lab, char **tok)
+static int split(const char *src, size_t n, char buf[ASM_LINE_MAX + 1], char **lab, char **tok,
+                 char *err, size_t errlen)
 {
-    size_t k = 0;
-    for (size_t i = 0; i < n && k + 1 < buflen; i++) {
-        char c = src[i];
-        if (c == '#' || c == ';')
-            break;
-        buf[k++] = (char)tolower((unsigned char)c);
+    while (n && (*src == ' ' || *src == '\t')) {
+        src++;
+        n--;
     }
-    buf[k] = 0;
+    size_t end = 0;
+    while (end < n && src[end] != '#' && src[end] != ';')
+        end++;
+    while (end && strchr(" \t,\r", src[end - 1]))
+        end--;
+    if (end > ASM_LINE_MAX) {
+        snprintf(err, errlen, "line too long (max %d characters of code)", ASM_LINE_MAX);
+        return -1;
+    }
+    for (size_t i = 0; i < end; i++)
+        buf[i] = (char)tolower((unsigned char)src[i]);
+    buf[end] = 0;
     *lab = NULL;
     char *body = buf;
     char *colon = strchr(buf, ':');
@@ -112,8 +124,10 @@ static int split(const char *src, size_t n, char *buf, size_t buflen, char **lab
     }
     int nt = 0;
     for (char *p = strtok(body, " \t,\r"); p; p = strtok(NULL, " \t,\r")) {
-        if (nt == MAX_TOK)
+        if (nt == MAX_TOK) {
+            snprintf(err, errlen, "too many operands");
             return -1;
+        }
         tok[nt++] = p;
     }
     return nt;
@@ -127,6 +141,10 @@ static int parse_ins(char **tok, int nt, const label *labs, int nlabs, vm_ins *o
         return -1;
     }
     const char *sig = SIG[op];
+    if (!labs && (sig[0] == 'l' || op == OP_WAIT || op == OP_HALT)) {
+        snprintf(err, errlen, "jumps, wait and halt only make sense inside a program");
+        return -1;
+    }
     int want = (int)strlen(sig);
     if (nt - 1 != want) {
         snprintf(err, errlen, "'%s' takes %d operand%s", tok[0], want, want == 1 ? "" : "s");
@@ -138,7 +156,6 @@ static int parse_ins(char **tok, int nt, const label *labs, int nlabs, vm_ins *o
         const char *t = tok[i + 1];
         vm_arg *a = i ? &out->b : &out->a;
         int r, p;
-        long num;
         if (sig[i] == 'l') {
             int found = -1;
             for (int j = 0; j < nlabs; j++)
@@ -160,16 +177,25 @@ static int parse_ins(char **tok, int nt, const label *labs, int nlabs, vm_ins *o
             }
             a->kind = K_PORT;
             a->v = (uint16_t)p;
-        } else if (parse_num(t, &num)) {
+        } else {
+            switch (parse_num(t, &a->v)) {
+            case NUM_NOT_LITERAL:
+                snprintf(err, errlen, "what is '%s'?", t);
+                return -1;
+            case NUM_INVALID:
+                snprintf(err, errlen, "invalid number '%s'", t);
+                return -1;
+            case NUM_RANGE:
+                snprintf(err, errlen, "number out of range (-32768 to 65535): '%s'", t);
+                return -1;
+            case NUM_OK:
+                break;
+            }
             if (sig[i] == 'd') {
                 snprintf(err, errlen, "can't write to a number");
                 return -1;
             }
             a->kind = K_LIT;
-            a->v = (uint16_t)num;
-        } else {
-            snprintf(err, errlen, "what is '%s'?", t);
-            return -1;
         }
     }
     return 0;
@@ -186,7 +212,7 @@ int vm_assemble(vm_t *vm, const char *src, char *err, size_t errlen)
 {
     label labs[VM_MAX_INSTR + 1];
     int nlabs = 0, n = 0, lineno = 0;
-    char buf[128], *lab, *tok[MAX_TOK], e[64];
+    char buf[ASM_LINE_MAX + 1], *lab, *tok[MAX_TOK], e[64];
 
     vm->n = 0;
     vm->state = VM_IDLE;
@@ -196,9 +222,9 @@ int vm_assemble(vm_t *vm, const char *src, char *err, size_t errlen)
         const char *line = s;
         s = next_line(s, &len);
         lineno++;
-        int nt = split(line, len, buf, sizeof buf, &lab, tok);
+        int nt = split(line, len, buf, &lab, tok, e, sizeof e);
         if (nt < 0) {
-            snprintf(err, errlen, "line %d: too many operands", lineno);
+            snprintf(err, errlen, "line %d: %s", lineno, e);
             return -1;
         }
         if (lab) {
@@ -232,7 +258,7 @@ int vm_assemble(vm_t *vm, const char *src, char *err, size_t errlen)
         const char *line = s;
         s = next_line(s, &len);
         lineno++;
-        int nt = split(line, len, buf, sizeof buf, &lab, tok);
+        int nt = split(line, len, buf, &lab, tok, e, sizeof e);
         if (nt == 0)
             continue;
         if (parse_ins(tok, nt, labs, nlabs, &vm->prog[n], e, sizeof e)) {
@@ -247,12 +273,10 @@ int vm_assemble(vm_t *vm, const char *src, char *err, size_t errlen)
 
 int vm_parse_line(const char *line, vm_ins *out, char *err, size_t errlen)
 {
-    char buf[128], *lab, *tok[MAX_TOK];
-    int nt = split(line, strlen(line), buf, sizeof buf, &lab, tok);
-    if (nt < 0) {
-        snprintf(err, errlen, "too many operands");
+    char buf[ASM_LINE_MAX + 1], *lab, *tok[MAX_TOK];
+    int nt = split(line, strlen(line), buf, &lab, tok, err, errlen);
+    if (nt < 0)
         return -1;
-    }
     if (lab) {
         snprintf(err, errlen, "labels only work in programs");
         return -1;

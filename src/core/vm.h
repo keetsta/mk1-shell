@@ -55,7 +55,7 @@ extern const char *const VM_PORTS[P__N];
 
 /* 0 on success, otherwise err holds "line N: ..." and the old program is gone */
 int vm_assemble(vm_t *vm, const char *src, char *err, size_t errlen);
-/* one instruction with no labels, for `try`; 0 on success */
+/* one non-flow instruction with no labels, for `try`; 0 on success */
 int vm_parse_line(const char *line, vm_ins *out, char *err, size_t errlen);
 /* registers, flag and outputs back to zero, keeps the program and the EEPROM */
 void vm_reset(vm_t *vm, uint16_t seed);

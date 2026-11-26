@@ -17,6 +17,10 @@ void shell_input(char c);
 void shell_tick(void);
 /* a program is running in the foreground (the platform may route keys to fake inputs) */
 int shell_running(void);
+/* The source editor is in the foreground. */
+int shell_editing(void);
+/* Known terminal dimensions. 0 lets the editor query the terminal; negative rows mean plain input. */
+void shell_resize(int rows, int cols);
 /* a terminal has just opened the port (DTR rose on the card): the banner and the prompt again, since
    whatever the shell printed before went nowhere */
 void shell_connect(void);

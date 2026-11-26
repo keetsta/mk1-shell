@@ -64,6 +64,9 @@ The emulator saves progress in `~/.mk1-shell`. Set `MK1_STATE` to choose another
 | Action | Keys |
 | --- | --- |
 | Recall a command or clear the screen | <kbd>↑</kbd> / <kbd>↓</kbd> or `cls` |
+| Open the program for editing | `edit` to reopen it or `edit new` for an empty buffer |
+| Move around the program | arrows, home, end, page up and page down |
+| Save or exit the editor | <kbd>Ctrl</kbd>+<kbd>O</kbd> to save, <kbd>Ctrl</kbd>+<kbd>X</kbd> to exit |
 | Page through the manual | <kbd>Space</kbd> for a page, <kbd>Enter</kbd> for a line, <kbd>q</kbd> to close |
 | Press the virtual button or adjust virtual light | <kbd>Space</kbd> or <kbd>+</kbd> / <kbd>-</kbd> while a program runs |
 | Stop a program or exit the shell | <kbd>Ctrl</kbd>+<kbd>C</kbd> or <kbd>Ctrl</kbd>+<kbd>D</kbd> on an empty line |

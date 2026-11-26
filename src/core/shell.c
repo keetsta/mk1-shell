@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 
 #include "content.h"
 #include "font.h"
@@ -56,7 +55,8 @@ static const char HELP[] =
     "  man [n]     the manual, chapter n\n"
     "  tasks       the tasks and how far you got\n"
     "  task <n>    pick a task\n"
-    "  edit        type a program, end it with a line holding only .\n"
+    "  edit        open the program editor (ctrl-o saves, ctrl-x exits)\n"
+    "  edit new    start with an empty editor\n"
     "  list        show the program\n"
     "  run         run it on the card, ctrl-c stops\n"
     "  check       test it against the task\n"
@@ -70,12 +70,17 @@ static const char HELP[] =
 static enum { M_LINE, M_EDIT, M_RUN, M_MORE } mode;
 static saved st;
 static char line[SH_LINE];
-static int len, cur, esc, esc_arg, last_cr;   /* cur: cursor position in line, 0..len */
+static int len, cur, line_full, last_cr;   /* cur: cursor position in line, 0..len */
+static int esc, esc_arg, esc_second;
 /* the last HIST_N commands, in RAM only; hist_pos -1 is the line being typed, 0 the newest command */
 static char hist[HIST_N][SH_LINE], draft[SH_LINE];
 static int hist_n, hist_head, hist_pos = -1;
 static char editbuf[VM_SRC_MAX];
-static int editlen, editn;
+static char edit_message[128];
+static int editlen, editcur, edit_goal, edit_top, edit_left, edit_redraw;
+static int edit_asking, edit_paste, edit_dot, program_in_memory;
+static int term_rows, term_cols, term_probe;
+static int reported_rows, reported_cols;
 static vm_t vm, bench, checker;
 static marquee mq;
 static int mq_on, mq_div;
@@ -125,8 +130,6 @@ static void prompt(void)
 {
     if (mode == M_LINE)
         out("mk1> ");
-    else if (mode == M_EDIT)
-        outf("%2d| ", editn + 1);
 }
 
 /* ESC ] 7777 ; f ; <144 hex digits, one level per LED, row 0 first, left to right> BEL */
@@ -176,6 +179,8 @@ static int save(void)
     int result = hal_save(&st, sizeof st);
     if (result)
         out("could not save progress; changes are only in this session\n");
+    else
+        program_in_memory = 0;
     return result;
 }
 
@@ -304,6 +309,12 @@ static void cmd_tasks(void)
     }
 }
 
+static void select_task(int t)
+{
+    st.task = (uint8_t)t;
+    outf("selected task %d: %s (man %d)\n", t, TASKS[t - 1].name, t - 1);
+}
+
 static void cmd_task(const char *arg)
 {
     int t;
@@ -315,9 +326,8 @@ static void cmd_task(const char *arg)
         outf("task %d is locked\n", t);
         return;
     }
-    st.task = (uint8_t)t;
+    select_task(t);
     save();
-    outf("task %d: %s. it is described in man %d\n", t, TASKS[t - 1].name, t - 1);
 }
 
 /* the board gets each task's best program so far: the shortest, then the fastest. A stand-in until goals
@@ -385,6 +395,10 @@ static void cmd_check(void)
     }
     if (res.passed < res.segs) {
         outf("test %d of %d: the outputs are wrong\n", res.passed + 1, res.segs);
+        outf("inputs: btn=%u lux=%u\n", checker.dev.btn, checker.dev.lux);
+        if (t == 2)
+            out("rows start at 0. row 4 is the middle row (fifth from the top).\n"
+                "try mov 4 row, then try mov 0x8000 pix to see it.\n");
         return;
     }
     outf("task %d passed: %d instructions, %lu cycles in %lu ticks\n", t, checker.n, (unsigned long)res.cycles,
@@ -397,7 +411,7 @@ static void cmd_check(void)
             st.unlocked = (uint8_t)(t + 1);
             outf("chapter %d unlocked: man %d\n", t, t);
             if (task_open(t + 1))
-                st.task = (uint8_t)(t + 1);
+                select_task(t + 1);
         }
     } else {
         out("that was the last chapter so far\n");
@@ -407,40 +421,301 @@ static void cmd_check(void)
 
 /* ---- programs ---------------------------------------------------------------- */
 
-static void cmd_edit(void)
+static int edit_bol(int at)
 {
-    editlen = editn = 0;
-    editbuf[0] = 0;
-    mode = M_EDIT;
-    out("type the program, end it with a line holding only . (ctrl-c keeps the old one)\n");
+    while (at && editbuf[at - 1] != '\n')
+        at--;
+    return at;
 }
 
-static void edit_line(const char *l)
+static int edit_eol(int at)
 {
-    const char *p = l;
-    while (*p == ' ')
-        p++;
-    if (!strcmp(p, ".")) {
-        char err[96];
-        memcpy(st.prog, editbuf, (size_t)editlen + 1);
-        const char *status = save() ? "program in memory" : "saved";
-        mode = M_LINE;
-        if (vm_assemble(&vm, st.prog, err, sizeof err))
-            outf("%s, but: %s\n", status, err);
-        else
-            outf("%s, %d instruction%s\n", status, vm.n, vm.n == 1 ? "" : "s");
+    while (at < editlen && editbuf[at] != '\n')
+        at++;
+    return at;
+}
+
+static int edit_dirty(void) { return strcmp(editbuf, st.prog) != 0; }
+
+static int edit_rows(void) { return term_rows ? term_rows : reported_rows ? reported_rows : 12; }
+static int edit_cols(void) { return term_cols ? term_cols : reported_cols ? reported_cols : 40; }
+static const char *edit_status(void) { return edit_asking ? "save changes? y/n" : edit_message; }
+
+static int edit_body_rows(void)
+{
+    int rows = edit_rows(), width = edit_cols() - 1;
+    int status_rows = ((int)strlen(edit_status()) + width - 1) / width;
+    int limit = rows >= 8 ? 3 : rows >= 5 ? 2 : 1;
+    if (status_rows < 1)
+        status_rows = 1;
+    if (status_rows > limit)
+        status_rows = limit;
+    int body = rows - 2 - status_rows;
+    return body > 0 ? body : 1;
+}
+
+static void edit_screen_line(int row, const char *text, int width)
+{
+    outf("\x1b[%d;1H\x1b[K", row);
+    if (width)
+        hal_write(text, (size_t)width);
+}
+
+static int edit_field(int row, const char *text, int width)
+{
+    int n = (int)strlen(text);
+    if (n > width)
+        n = width;
+    edit_screen_line(row, text, n);
+    return n;
+}
+
+static void edit_draw(void)
+{
+    edit_redraw = 0;
+    if (!shell_editing() || term_rows < 0)
+        return;
+
+    int rows = edit_rows(), width = edit_cols() - 1;
+    int header = rows > 3, body = edit_body_rows(), prefix = width >= 12 ? 5 : 0;
+    int lineno = 0, col = editcur - edit_bol(editcur);
+    for (int i = 0; i < editcur; i++)
+        lineno += editbuf[i] == '\n';
+    if (lineno < edit_top)
+        edit_top = lineno;
+    if (lineno >= edit_top + body)
+        edit_top = lineno - body + 1;
+    if (col < edit_left)
+        edit_left = col;
+    if (col >= edit_left + width - prefix)
+        edit_left = col - (width - prefix) + 1;
+
+    char b[160];
+    if (header) {
+        snprintf(b, sizeof b, "mk-1 edit%s", edit_dirty() ? " *" : "");
+        edit_field(1, b, width);
+    }
+    int at = 0;
+    for (int i = 0; i < edit_top; i++)
+        at = edit_eol(at) + 1;
+    for (int i = 0; i < body; i++) {
+        int n = 0;
+        if (at <= editlen) {
+            if (prefix)
+                n = snprintf(b, sizeof b, "%4d ", edit_top + i + 1);
+            int end = edit_eol(at);
+            for (int j = at + edit_left; j < end && n < width; j++) {
+                unsigned char c = (unsigned char)editbuf[j];
+                b[n++] = c == '\t' ? ' ' : c >= 0x20 && c < 0x7f ? (char)c : '?';
+            }
+            at = end + 1;
+        }
+        edit_screen_line(header + i + 1, b, n);
+    }
+    const char *message = edit_status();
+    for (int row = header + body + 1; row < rows; row++)
+        message += edit_field(row, message, width);
+    if (rows >= 2)
+        edit_field(rows, edit_asking ? "^c back" : "^o save  ^x exit", width);
+    outf("\x1b[%d;%dH", header + lineno - edit_top + 1, prefix + col - edit_left + 1);
+}
+
+static void edit_probe(void)
+{
+    if (!term_rows) {
+        term_probe = 1;
+        out("\x1b[999;999H\x1b[6n");
+    }
+}
+
+static void edit_screen_open(void)
+{
+    if (term_rows < 0)
+        out("ctrl-o saves, ctrl-x exits, a final . saves and exits\n");
+    else {
+        out("\x1b[?1049h\x1b[?2004h\x1b[2J");
+        edit_probe();
+        edit_draw();
+    }
+}
+
+static void cmd_edit(const char *arg)
+{
+    if (*arg && strcmp(arg, "new")) {
+        out("usage: edit [new]\n");
         return;
     }
-    size_t n = strlen(l);
-    if (editlen + (int)n + 2 > VM_SRC_MAX) {
-        out("the program text is full\n");
+    strcpy(editbuf, *arg ? "" : st.prog);
+    editlen = (int)strlen(editbuf);
+    editcur = edit_top = edit_left = edit_asking = edit_paste = edit_dot = 0;
+    edit_goal = -1;
+    edit_message[0] = 0;
+    mode = M_EDIT;
+    edit_screen_open();
+}
+
+static void edit_leave(void)
+{
+    if (term_rows >= 0)
+        out("\x1b[?2004l\x1b[?1049l");
+    term_probe = 0;
+    mode = M_LINE;
+}
+
+static void edit_close(const char *message)
+{
+    edit_leave();
+    if (*message)
+        outf("%s\n", message);
+    prompt();
+}
+
+static void edit_save(int close)
+{
+    char err[96];
+    memcpy(st.prog, editbuf, (size_t)editlen + 1);
+    if (close)
+        edit_leave();
+    int failed = close ? save() : hal_save(&st, sizeof st);
+    program_in_memory = failed;
+    const char *status = failed ? "program in memory" : "saved";
+    if (vm_assemble(&vm, st.prog, err, sizeof err)) {
+        snprintf(edit_message, sizeof edit_message, "%s, but: %s", status, err);
+        if (!close && !strncmp(err, "line ", 5)) {
+            long lineno = strtol(err + 5, NULL, 10);
+            editcur = 0;
+            for (long i = 1; i < lineno && edit_eol(editcur) < editlen; i++)
+                editcur = edit_eol(editcur) + 1;
+            edit_goal = -1;
+        }
+    } else {
+        snprintf(edit_message, sizeof edit_message, "%s, %d instruction%s", status, vm.n, vm.n == 1 ? "" : "s");
+    }
+    if (close || term_rows < 0)
+        outf("%s\n", edit_message);
+    if (close)
+        prompt();
+}
+
+static void edit_insert(const char *s, int n)
+{
+    if (editlen + n >= VM_SRC_MAX) {
+        snprintf(edit_message, sizeof edit_message, "program text is full (%d bytes)", VM_SRC_MAX - 1);
+        if (term_rows < 0)
+            outf("%s\n", edit_message);
         return;
     }
-    memcpy(editbuf + editlen, l, n);
-    editlen += (int)n;
-    editbuf[editlen++] = '\n';
-    editbuf[editlen] = 0;
-    editn++;
+    memmove(editbuf + editcur + n, editbuf + editcur, (size_t)(editlen - editcur + 1));
+    memcpy(editbuf + editcur, s, (size_t)n);
+    editcur += n;
+    editlen += n;
+    edit_message[0] = 0;
+}
+
+static void edit_delete(void)
+{
+    if (editcur < editlen) {
+        memmove(editbuf + editcur, editbuf + editcur + 1, (size_t)(editlen - editcur));
+        editlen--;
+        edit_message[0] = 0;
+    }
+}
+
+static void edit_move_lines(int count)
+{
+    int at = edit_bol(editcur);
+    if (edit_goal < 0)
+        edit_goal = editcur - at;
+    while (count < 0 && at) {
+        at = edit_bol(at - 1);
+        count++;
+    }
+    while (count > 0 && edit_eol(at) < editlen) {
+        at = edit_eol(at) + 1;
+        count--;
+    }
+    int end = edit_eol(at);
+    editcur = at + edit_goal < end ? at + edit_goal : end;
+}
+
+static void edit_key(char k)
+{
+    if (edit_asking || edit_paste)
+        return;
+    edit_dot = 0;
+    if (k == 'A' || k == 'B' || k == 'P' || k == 'N') {
+        int count = k == 'A' || k == 'B' ? 1 : edit_body_rows();
+        edit_move_lines(k == 'A' || k == 'P' ? -count : count);
+    } else {
+        edit_goal = -1;
+        switch (k) {
+        case 'C': if (editcur < editlen) editcur++; break;
+        case 'D': if (editcur > 0) editcur--; break;
+        case 'H': editcur = edit_bol(editcur); break;
+        case 'F': editcur = edit_eol(editcur); break;
+        case 'X': edit_delete(); break;
+        }
+    }
+    edit_redraw = 1;
+}
+
+static void edit_input(char c)
+{
+    int dot = edit_dot;
+    edit_dot = 0;
+    if (edit_asking) {
+        if (c == 'y' || c == 'Y')
+            edit_save(1);
+        else if (c == 'n' || c == 'N')
+            edit_close(program_in_memory ? "edit cancelled. previous program is only in this session" : "edit cancelled");
+        else if (c == 3)
+            edit_asking = 0;
+    } else if (!edit_paste && (c == 24 || c == 3)) {
+        if (!edit_dirty())
+            edit_close(program_in_memory ? "program is only in this session" : "");
+        else {
+            edit_asking = 1;
+            if (term_rows < 0)
+                out("save changes? y/n\n");
+        }
+    } else if (!edit_paste && (c == 15 || c == 19)) {
+        edit_save(0);
+    } else if (!edit_paste && c == 12) {
+        edit_probe();
+    } else if (!edit_paste && (c == 1 || c == 5)) {
+        edit_key(c == 1 ? 'H' : 'F');
+    } else if (!edit_paste && (c == 8 || c == 0x7f)) {
+        if (editcur > 0) {
+            editcur--;
+            edit_delete();
+        }
+        edit_goal = -1;
+    } else if (c == '\r' || c == '\n') {
+        /* The old dot terminator still works for line-by-line input. Pasted dots are literal. */
+        int start = edit_bol(editcur);
+        const char *p = editbuf + start;
+        while (*p == ' ')
+            p++;
+        if (dot && !edit_paste && editcur == editlen && !strcmp(p, ".")) {
+            editbuf[start] = 0;
+            editlen = start;
+            edit_save(1);
+        } else {
+            edit_insert("\n", 1);
+            edit_goal = -1;
+        }
+    } else if (c == '\t') {
+        edit_insert("    ", 4 - (editcur - edit_bol(editcur)) % 4);
+        edit_goal = -1;
+    } else if ((unsigned char)c >= 0x20 && (unsigned char)c < 0x7f) {
+        int before = editlen;
+        edit_insert(&c, 1);
+        edit_dot = !edit_paste && c == '.' && editlen > before;
+        edit_goal = -1;
+    } else if ((unsigned char)c >= 0xc0 && !edit_paste) {
+        out("\a");
+    }
+    edit_redraw = 1;
 }
 
 static void cmd_list(void)
@@ -497,13 +772,6 @@ static void cmd_try(const char *arg)
         out("usage: try <instruction>, for example: try mov 0b1010 pix\n");
         return;
     }
-    static const char *const flow[] = {"jmp", "jt", "jf", "wait", "halt"};
-    size_t w = strcspn(arg, " ");
-    for (int i = 0; i < 5; i++)
-        if (w == strlen(flow[i]) && !strncasecmp(arg, flow[i], w)) {
-            out("jumps, wait and halt only make sense inside a program\n");
-            return;
-        }
     if (vm_parse_line(arg, &in, err, sizeof err)) {
         outf("%s\n", err);
         return;
@@ -515,6 +783,8 @@ static void cmd_try(const char *arg)
         outf("%s\n", bench.err);
     show(bench.dev.screen);
     print_regs(&bench);
+    if (bench.dev.row >= VM_ROWS)
+        outf("row %u is outside 0..%d (0 is the top). pix has no effect there\n", bench.dev.row, VM_ROWS - 1);
 }
 
 static void cmd_dragon(void)
@@ -553,13 +823,17 @@ static void command(char *l)
     else if (!strcmp(l, "task"))
         cmd_task(arg);
     else if (!strcmp(l, "edit"))
-        cmd_edit();
+        cmd_edit(arg);
     else if (!strcmp(l, "list"))
         cmd_list();
     else if (!strcmp(l, "run"))
         cmd_run();
-    else if (!strcmp(l, "check"))
-        cmd_check();
+    else if (!strcmp(l, "check")) {
+        if (*arg)
+            out("usage: check (use task <n> to select a task)\n");
+        else
+            cmd_check();
+    }
     else if (!strcmp(l, "top"))
         cmd_top();
     else if (!strcmp(l, "try"))
@@ -638,8 +912,12 @@ static void hist_move(int dir)
 
 static void insert_char(char c)
 {
-    if (len >= SH_LINE - 1)
+    if (len >= SH_LINE - 1) {
+        if (!line_full)
+            out("\a");
+        line_full = 1;
         return;
+    }
     memmove(line + cur + 1, line + cur, (size_t)(len - cur));
     line[cur++] = c;
     len++;
@@ -663,13 +941,27 @@ static void cursor_end(void)
 /* the final byte of an escape sequence: arrows, home, end, delete; anything else is ignored */
 static void key(char k, int arg)
 {
+    if (mode == M_EDIT && k == '~') {
+        if (arg == 200 || arg == 201) {
+            edit_paste = arg == 200 && !edit_asking;
+            edit_dot = 0;
+            return;
+        }
+        if (arg == 5 || arg == 6) {
+            edit_key(arg == 5 ? 'P' : 'N');
+            return;
+        }
+    }
     if (k == '~')
         k = arg == 1 || arg == 7 ? 'H' : arg == 4 || arg == 8 ? 'F' : arg == 3 ? 'X' : 0;
+    if (mode == M_EDIT) {
+        edit_key(k);
+        return;
+    }
     switch (k) {
     case 'A':
     case 'B':
-        if (mode == M_LINE)
-            hist_move(k == 'A' ? 1 : -1);
+        hist_move(k == 'A' ? 1 : -1);
         break;
     case 'C':
         if (cur < len)
@@ -712,15 +1004,23 @@ static void key_input(char c)
     if (esc) {
         if (esc == 1) {
             esc = c == '[' ? 2 : c == 'O' ? 4 : 0;
-            esc_arg = 0;
-        } else if (esc == 2 && c >= '0' && c <= '9') {
-            if (esc_arg < 1000)
-                esc_arg = esc_arg * 10 + (c - '0');
+            esc_arg = esc_second = 0;
+        } else if ((esc == 2 || esc == 3) && c >= '0' && c <= '9') {
+            int *arg = esc == 2 ? &esc_arg : &esc_second;
+            if (*arg < 1000)
+                *arg = *arg * 10 + (c - '0');
         } else if (c == ';') {
-            esc = 3;                 /* further parameters (shift, ctrl) don't matter */
+            esc = esc == 2 ? 3 : 5;
         } else if (c >= 0x40 && c <= 0x7e) {
+            if (esc == 3 && c == 'R' && mode == M_EDIT && term_probe && esc_arg && esc_second) {
+                reported_rows = esc_arg > 100 ? 100 : esc_arg;
+                reported_cols = esc_second > 160 ? 160 : esc_second < 2 ? 2 : esc_second;
+                term_probe = 0;
+                edit_redraw = 1;
+            } else {
+                key(c, esc_arg);
+            }
             esc = 0;
-            key(c, esc_arg);
         }
         return;
     }
@@ -728,8 +1028,17 @@ static void key_input(char c)
         esc = 1;
         return;
     }
+    if (c == '\n' && last_cr) {
+        last_cr = 0;
+        return;
+    }
+    last_cr = c == '\r';
+    if (mode == M_EDIT) {
+        edit_input(c);
+        return;
+    }
     if (c == 4) {            /* ^D on an empty line leaves, like a shell */
-        if (mode == M_LINE && !len) {
+        if (!len) {
             out("bye\n");
             hal_exit();
             prompt();
@@ -744,19 +1053,15 @@ static void key_input(char c)
         key('F', 0);
         return;
     }
-    if (c == '\n' && last_cr) {
-        last_cr = 0;
-        return;
-    }
-    last_cr = c == '\r';
     if (c == '\r' || c == '\n') {
         cursor_end();
         out("\n");
         line[len] = 0;
         len = cur = 0;
         hist_pos = -1;
-        if (mode == M_EDIT) {
-            edit_line(line);
+        if (line_full) {
+            line_full = 0;
+            out("command is too long\n");
         } else {
             hist_add(line);
             command(line);
@@ -767,12 +1072,8 @@ static void key_input(char c)
     if (c == 3) {
         cursor_end();
         out("^C\n");
-        len = cur = 0;
+        len = cur = line_full = 0;
         hist_pos = -1;
-        if (mode == M_EDIT) {
-            mode = M_LINE;
-            out("edit cancelled, the old program stays\n");
-        }
         prompt();
         return;
     }
@@ -798,6 +1099,8 @@ static void key_input(char c)
 
 void shell_tick(void)
 {
+    if (mode == M_EDIT && edit_redraw)
+        edit_draw();
     if (mode == M_RUN) {
         vm.dev.btn = hal_button() != 0;
         vm.dev.lux = hal_lux();
@@ -929,6 +1232,10 @@ void shell_input(char c)
 
 void shell_connect(void)
 {
+    if (mode == M_EDIT) {
+        edit_screen_open();
+        return;
+    }
     out(BANNER);
     if (mode == M_RUN) {
         out("a program is running, ctrl-c stops\n");
@@ -943,10 +1250,19 @@ void shell_connect(void)
 
 void shell_disconnect(void)
 {
-    web = osc_st = osc_len = esc = esc_arg = last_cr = 0;
+    web = osc_st = osc_len = esc = esc_arg = esc_second = last_cr = 0;
+    edit_dot = edit_paste = term_probe = reported_rows = reported_cols = 0;
 }
 
 int shell_running(void) { return mode == M_RUN; }
+int shell_editing(void) { return mode == M_EDIT; }
+
+void shell_resize(int rows, int cols)
+{
+    term_rows = rows > 100 ? 100 : rows;
+    term_cols = cols > 160 ? 160 : cols == 1 ? 2 : cols;
+    edit_redraw = 1;
+}
 
 void shell_card(const uint8_t chipid[8], const uint8_t randid[16])
 {
@@ -984,6 +1300,7 @@ void shell_init(void)
         st.task = 1;
     vm_reset(&bench, 0x1234);
     bench.state = VM_IDLE;
+    program_in_memory = 0;
     mode = M_LINE;
     out(BANNER);
     prompt();

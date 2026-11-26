@@ -25,19 +25,34 @@
 #define TOP 12                      /* first line of the shell area */
 
 static struct termios saved_tio;
-static int tty, dirty = 1, btn, lines = 24;
+static int tty, dirty = 1, btn, lines = 24, cols = 80, top = TOP, layout_top, was_editing;
 static volatile sig_atomic_t resized;
 static uint16_t rows[VM_ROWS], lux = 512;
 static char state_path[1024];
 
+/* Setting a scroll region homes the cursor. Keep it where the shell left it. */
+static void layout(void)
+{
+    if (lines > 1)
+        printf("\x1b" "7\x1b[%d;%dr\x1b" "8", top, lines);
+    if (layout_top != top)
+        printf("\x1b[%d;1H\x1b[K", top);
+    layout_top = top;
+    dirty = 1;
+}
+
 void hal_write(const char *s, size_t n)
 {
+    int editing = shell_editing();
+    if (tty && was_editing && !editing)
+        layout();
+    was_editing = editing;
     fwrite(s, 1, n, stdout);
-    if (!tty)
+    if (!tty || editing)
         return;
     /* `cls` wipes the matrix area too: put it back */
     if (n >= 4 && memmem(s, n, "\x1b[2J", 4)) {
-        printf("\x1b[%d;1H", TOP);
+        printf("\x1b[%d;1H", top);
         dirty = 1;
     }
     if (memchr(s, '\n', n))
@@ -53,7 +68,7 @@ void hal_matrix(const uint16_t r[VM_ROWS])
 
 int hal_button(void) { return btn; }
 uint16_t hal_lux(void) { return lux; }
-int hal_rows(void) { return tty ? lines - TOP + 1 : 0; }
+int hal_rows(void) { return tty ? lines - top + 1 : 0; }
 void hal_exit(void) { exit(0); }
 
 int hal_load(void *buf, size_t n)
@@ -89,12 +104,17 @@ int hal_save(const void *buf, size_t n)
     return -1;
 }
 
-static int term_lines(void)
+static void terminal_size(void)
 {
     struct winsize ws;
-    if (!ioctl(1, TIOCGWINSZ, &ws) && ws.ws_row > TOP + 2)
-        return ws.ws_row;
-    return 24;
+    if (!ioctl(1, TIOCGWINSZ, &ws)) {
+        if (ws.ws_row)
+            lines = ws.ws_row;
+        if (ws.ws_col)
+            cols = ws.ws_col;
+    }
+    top = lines >= TOP + 3 && cols >= 34 ? TOP : 1;
+    shell_resize(lines, cols);
 }
 
 /* whole lines are wiped, so text that scrolled under the panel (a terminal without the region) is hidden */
@@ -113,14 +133,6 @@ static void draw(void)
     dirty = 0;
 }
 
-/* the scroll region again, keeping the cursor where it was (setting a region homes the cursor) */
-static void layout(void)
-{
-    lines = term_lines();
-    printf("\x1b" "7\x1b[%d;%dr\x1b" "8", TOP, lines);
-    dirty = 1;
-}
-
 static void on_winch(int sig)
 {
     (void)sig;
@@ -131,7 +143,9 @@ static void restore(void)
 {
     if (!tty)
         return;
-    printf("\x1b[r\x1b[%d;1H\r\n", term_lines());
+    if (shell_editing())
+        printf("\x1b[?2004l\x1b[?1049l");
+    printf("\x1b[r\x1b[%d;1H\r\n", lines);
     fflush(stdout);
     tcsetattr(0, TCSANOW, &saved_tio);
 }
@@ -165,20 +179,29 @@ int main(void)
         t.c_cc[VMIN] = 0;
         t.c_cc[VTIME] = 0;
         tcsetattr(0, TCSANOW, &t);
-        lines = term_lines();
-        printf("\x1b[2J\x1b[%d;%dr\x1b[%d;1H", TOP, lines, TOP);
+        terminal_size();
+        printf("\x1b[2J");
+        layout();
+        printf("\x1b[%d;1H", top);
         atexit(restore);
         signal(SIGWINCH, on_winch);
-    }
+    } else
+        shell_resize(-1, 0);
 
     shell_init();
     long long next = now_ms() + VM_TICK_MS;
     for (;;) {
         if (tty && resized) {
             resized = 0;
-            layout();
+            terminal_size();
+            if (!shell_editing()) {
+                int panel_changed = layout_top != top;
+                layout();
+                if (panel_changed)
+                    shell_connect();
+            }
         }
-        if (tty && dirty)
+        if (tty && dirty && top != 1 && !shell_editing())
             draw();
         fflush(stdout);
         long long wait = next - now_ms();
